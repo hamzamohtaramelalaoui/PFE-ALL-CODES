@@ -1,0 +1,62 @@
+{
+  "data": [
+    {
+      "labels": {
+        "app": "mc-intra-config-service",
+        "container": "mc-intra-config-service",
+        "job": "mc-intra/mc-intra-config-service",
+        "namespace": "mc-intra",
+        "node_name": "tokio",
+        "pod": "mc-intra-config-service-84dd9f974c-q7b54",
+        "service_name": "mc-intra-config-service"
+      },
+      "lines": [
+        {
+          "line": {
+            "level": "error",
+            "message": "Servlet.service() for servlet [dispatcherServlet] in context with path [] threw exception [Request processing failed: com.marketingconfort.starter.core.exceptions.FunctionalException: Can't delete properties of other groups or in envs other than Local unless you're an admin] with root cause",
+            "path": "com.marketingconfort.mcIntraConfigserver.services.Implementation.PropertiesServiceImpl.deleteProperties(PropertiesServiceImpl.java:162)",
+            "error_type": "com.marketingconfort.starter.core.exceptions.functionalexception",
+            "timestamp": "2026-04-01T14:54:26.671Z",
+            "error_message": "Can't delete properties of other groups or in envs other than Local unless you're an admin"
+          }
+        },
+        {
+          "line": {
+            "level": "unknown",
+            "message": "Hibernate: select p1_0.id,p1_0.creation_date,p1_0.environment,p1_0.group_name,p1_0.prop_key,p1_0.label,p1_0.modification_date,p1_0.project,p1_0.sub_group_name,p1_0.user_id,p1_0.uuid,p1_0.prop_value from properties p1_0 where p1_0.uuid=?",
+            "timestamp": "2026-04-01T14:54:26.664851741Z"
+          }
+        },
+        {
+          "line": {
+            "level": "info",
+            "message": "Received response with status code: 200 OK",
+            "timestamp": "2026-04-01T14:54:26.660Z"
+          }
+        },
+        {
+          "line": {
+            "level": "info",
+            "message": "Sending GET request to URL: http://mc-intra-user-service/api/user/getByEmail/hamza.mohtaremelalaoui@izemx.com",
+            "path": "/api/user/getByEmail/hamza.mohtaremelalaoui@izemx.com",
+            "timestamp": "2026-04-01T14:54:26.637Z"
+          }
+        },
+        {
+          "line": {
+            "level": "info",
+            "message": "Creating custom headers from properties",
+            "timestamp": "2026-04-01T14:54:26.635Z"
+          }
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "linesReturned": 5,
+    "maxLinesAllowed": 5,
+    "resultsTruncated": true,
+    "totalLinesScanned": 216
+  }
+}

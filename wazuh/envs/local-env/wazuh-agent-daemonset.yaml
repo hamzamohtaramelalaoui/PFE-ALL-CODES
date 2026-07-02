@@ -1,0 +1,932 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wazuh-agent
+  namespace: wazuh
+spec:
+  selector:
+    matchLabels:
+      app: wazuh-agent
+  template:
+    metadata:
+      labels:
+        app: wazuh-agent
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: wazuh-agent
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 20
+
+      securityContext:
+        runAsUser: 0
+
+      #        INIT CONTAINERS
+      initContainers:
+        # 1) Clean stale PID / lock files
+        - name: cleanup-ossec-stale
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Cleaning old locks..."
+              mkdir -p /agent/var/run /agent/queue/ossec
+              rm -f /agent/var/start-script-lock || true
+              rm -f /agent/var/run/*.pid || true
+              rm -f /agent/queue/ossec/*.lock || true
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+
+        # 1.1) Ensure Falco's JSON event file exists before Wazuh logcollector starts.
+        - name: prepare-falco-log
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Preparing Falco event log..."
+              mkdir -p /falco-log
+              touch /falco-log/events.json
+              chmod 0644 /falco-log/events.json
+          volumeMounts:
+            - name: falco-log
+              mountPath: /falco-log
+
+        # 2) Seed /var/ossec into hostPath (first run only)
+        - name: seed-ossec-tree
+          image: wazuh/wazuh-agent:4.14.5
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Checking if seeding is required..."
+              if [ ! -d /agent/bin ]; then
+                echo "[init] Seeding /var/ossec to hostPath..."
+                tar -C /var/ossec -cf - . | tar -C /agent -xpf -
+              else
+                echo "[init] Existing data found, skipping seed"
+              fi
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+
+        # 3.1) Fix ownership/permissions
+        - name: fix-permissions
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Fixing permissions..."
+              mkdir -p /agent/etc/shared
+
+              # Wazuh execd validates active-response commands through ar.conf.
+              # Keep both names because Wazuh 4.14.x can append timeout 0 to custom commands.
+              cat > /agent/etc/shared/ar.conf <<'EOF'
+              yara_linux0 - yara.sh - 0
+              yara_linux - yara.sh - 0
+              clamav_linux0 - clamav.sh - 0
+              clamav_linux - clamav.sh - 0
+              EOF
+
+              chown -R 999:999 /agent/etc/shared || true
+              chmod 750 /agent/etc/shared || true
+              chmod 640 /agent/etc/shared/ar.conf || true
+              mkdir -p /agent/etc/yara/rules
+              for d in etc logs queue var rids tmp "active-response"; do
+                [ -d "/agent/$d" ] && chown -R 999:999 "/agent/$d"
+              done
+              chown -R 0:999 /agent/etc/yara
+              chmod 0750 /agent/etc/yara /agent/etc/yara/rules
+              chown -R 0:0 /agent/bin /agent/lib || true
+              find /agent/bin -type f -exec chmod 0755 {} \; || true
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+
+
+        # 3.2) Install YARA tooling into a shared volume, keeping the Wazuh image official.
+        - name: install-yara-tools
+          image: debian:12-slim
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -eu
+
+              echo "[init] Building YARA tools into the shared /opt/yara-tools volume..."
+
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+                ca-certificates curl make gcc autoconf automake libtool \
+                libssl-dev pkg-config jq file
+
+              rm -rf /tmp/yara-src /tmp/yara-v4.5.5.tar.gz
+              curl -fsSL https://github.com/VirusTotal/yara/archive/v4.5.5.tar.gz -o /tmp/yara-v4.5.5.tar.gz
+              mkdir -p /tmp/yara-src
+              tar -xzf /tmp/yara-v4.5.5.tar.gz -C /tmp/yara-src --strip-components=1
+
+              cd /tmp/yara-src
+              ./bootstrap.sh
+              ./configure --prefix=/opt/yara-tools
+              make -j"$(nproc)"
+              make install
+
+              mkdir -p /agent/etc/yara/rules /agent/active-response/bin /agent/logs
+
+              echo "[init] Downloading YARA rules into /var/ossec/etc/yara/rules..."
+              if ! curl -fsSL \
+                'https://valhalla.nextron-systems.com/api/v1/get' \
+                -H 'Content-Type: application/x-www-form-urlencoded' \
+                --data 'demo=demo&apikey=1111111111111111111111111111111111111111111111111111111111111111&format=text' \
+                -o /agent/etc/yara/rules/yara_rules.yar; then
+                echo "[init] WARNING: Valhalla download failed; writing minimal YARA rules file."
+                cat > /agent/etc/yara/rules/yara_rules.yar <<'RULEEOF'
+              /* Minimal fallback rules. */
+              RULEEOF
+              fi
+
+              # Always append a local EICAR-style test rule.
+              # The downloaded Valhalla rule pack does not necessarily match this simplified test string.
+              cat >> /agent/etc/yara/rules/yara_rules.yar <<'RULEEOF'
+
+              rule Local_EICAR_Test_File
+              {
+                strings:
+                  $eicar = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
+                condition:
+                  $eicar
+              }
+              RULEEOF
+
+              cat > /agent/active-response/bin/yara.sh <<'EOF'
+              #!/bin/sh
+              # Wazuh YARA active response for files monitored from the host through /host.
+              set -eu
+
+              LOG_FILE="/var/ossec/logs/active-responses.log"
+
+              log() {
+                echo "wazuh-yara: $*" >> "$LOG_FILE"
+              }
+
+              read INPUT_JSON || {
+                log "ERROR - No active-response JSON received"
+                exit 1
+              }
+
+              YARA_PATH="$(printf '%s' "$INPUT_JSON" | jq -r '.parameters.extra_args[1] // empty')"
+              YARA_RULES="$(printf '%s' "$INPUT_JSON" | jq -r '.parameters.extra_args[3] // empty')"
+              FILENAME="$(printf '%s' "$INPUT_JSON" | jq -r '.parameters.alert.syscheck.path // .parameters.alert.file // empty')"
+
+              if [ -z "$YARA_PATH" ] || [ -z "$YARA_RULES" ] || [ -z "$FILENAME" ]; then
+                log "ERROR - Missing yara_path, yara_rules, or filename"
+                exit 1
+              fi
+
+              if [ ! -x "$YARA_PATH/yara" ]; then
+                log "ERROR - YARA binary not executable: $YARA_PATH/yara"
+                exit 1
+              fi
+
+              if [ ! -f "$YARA_RULES" ]; then
+                log "ERROR - YARA rules file not found: $YARA_RULES"
+                exit 1
+              fi
+
+              if [ ! -f "$FILENAME" ]; then
+                log "ERROR - Scanned file not found: $FILENAME"
+                exit 0
+              fi
+
+              export LD_LIBRARY_PATH="/opt/yara-tools/lib:${LD_LIBRARY_PATH:-}"
+
+              size=-1
+              actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+              while [ "$size" != "$actual_size" ]; do
+                sleep 1
+                size="$actual_size"
+                actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+              done
+
+              if yara_output="$("$YARA_PATH/yara" -w -r "$YARA_RULES" "$FILENAME" 2>&1)"; then
+                if [ -n "$yara_output" ]; then
+                  printf "%s\\n" "$yara_output" | while IFS= read -r line; do
+                    log "INFO - Scan result: $line"
+                  done
+                else
+                  log "INFO - No YARA match for $FILENAME"
+                fi
+              else
+                log "ERROR - YARA scan failed for $FILENAME: $yara_output"
+              fi
+
+              exit 0
+              EOF
+
+              chmod 0750 /agent/active-response/bin/yara.sh
+              chown 0:999 /agent/active-response/bin/yara.sh
+              chown -R 0:999 /agent/etc/yara /agent/active-response/bin
+              chmod 0750 /agent/etc/yara /agent/etc/yara/rules
+              chmod 0640 /agent/etc/yara/rules/yara_rules.yar
+
+              /opt/yara-tools/bin/yara --version
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+            - name: yara-tools
+              mountPath: /opt/yara-tools
+
+
+        # 3.3) Install ClamAV tooling into a shared volume, keeping the Wazuh image official.
+        - name: install-clamav-tools
+          image: amazonlinux:2023
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -eu
+
+              echo "[init] Installing ClamAV tools using Amazon Linux 2023..."
+
+              dnf install -y clamav clamav-update findutils
+
+              mkdir -p /opt/clamav-tools/usr/bin
+              mkdir -p /opt/clamav-tools/usr/lib64
+              mkdir -p /opt/clamav-tools/etc/clamav
+              mkdir -p /opt/clamav-tools/db
+
+              cp -a /usr/bin/clamscan /opt/clamav-tools/usr/bin/
+              cp -a /usr/bin/freshclam /opt/clamav-tools/usr/bin/ || true
+
+              cp -a /etc/freshclam.conf /opt/clamav-tools/etc/clamav/freshclam.conf 2>/dev/null || true
+              cp -a /etc/clamd.d /opt/clamav-tools/etc/clamav/clamd.d 2>/dev/null || true
+
+              # Copy required shared libraries recursively.
+              copy_deps() {
+                target="$1"
+                [ -e "$target" ] || return 0
+
+                ldd "$target" 2>/dev/null | while read -r line; do
+                  lib="$(printf '%s\n' "$line" | awk '
+                    $2 == "=>" && $3 ~ /^\// { print $3 }
+                    $1 ~ /^\// { print $1 }
+                  ')"
+
+                  if [ -n "$lib" ] && [ -f "$lib" ]; then
+                    mkdir -p "/opt/clamav-tools$(dirname "$lib")"
+                    cp -a "$lib" "/opt/clamav-tools$lib"
+                  fi
+                done
+              }
+
+              copy_deps /usr/bin/clamscan
+              copy_deps /usr/bin/freshclam
+
+              # Explicitly copy ClamAV libraries.
+              # ldd on clamscan can miss indirect ClamAV libs like libclamav.so.12.
+              for lib in /usr/lib64/libclamav* /usr/lib64/libfreshclam* /usr/lib64/libclammspack*; do
+                [ -e "$lib" ] || continue
+                mkdir -p "/opt/clamav-tools$(dirname "$lib")"
+                cp -a "$lib" "/opt/clamav-tools$lib"
+                copy_deps "$lib"
+              done
+
+              # Copy dynamic loader if present.
+              ldd /usr/bin/clamscan 2>/dev/null | awk '/ld-linux/ {print $1}' | grep '^/' | while read -r loader; do
+                mkdir -p "/opt/clamav-tools$(dirname "$loader")"
+                cp -a "$loader" "/opt/clamav-tools$loader"
+              done
+
+              # Allow freshclam's clamav user to write database files.
+              chown -R 999:999 /opt/clamav-tools/db
+              chmod 0775 /opt/clamav-tools/db
+
+              # Try to update signatures. If network/rate-limit fails, pod should still start.
+              freshclam --datadir=/opt/clamav-tools/db || true
+
+              # Allow the Wazuh agent container to read the DB.
+              chmod -R a+rX /opt/clamav-tools/db
+
+              cat > /opt/clamav-tools/bin-clamscan <<'EOF'
+              #!/bin/sh
+              set -eu
+
+              export PATH="/opt/clamav-tools/usr/bin:/usr/bin:/bin"
+              export LD_LIBRARY_PATH="/opt/clamav-tools/usr/lib64:/opt/clamav-tools/lib64:/opt/clamav-tools/lib:/opt/clamav-tools/usr/lib:${LD_LIBRARY_PATH:-}"
+
+              exec /opt/clamav-tools/usr/bin/clamscan \
+                --database=/opt/clamav-tools/db \
+                "$@"
+              EOF
+
+              chmod 0755 /opt/clamav-tools/bin-clamscan
+
+              mkdir -p /agent/active-response/bin /agent/logs
+              cat > /agent/active-response/bin/clamav.sh <<'EOF'
+              #!/bin/sh
+              # Wazuh ClamAV active response for files monitored from the host through /host.
+              set -eu
+
+              LOG_FILE="/var/ossec/logs/active-responses.log"
+              CLAMSCAN="/opt/clamav-tools/bin-clamscan"
+
+              log() {
+                echo "wazuh-clamav: $*" >> "$LOG_FILE"
+              }
+
+              read INPUT_JSON || {
+                log "ERROR - No active-response JSON received"
+                exit 1
+              }
+
+              FILENAME="$(printf '%s' "$INPUT_JSON" | jq -r '.parameters.alert.syscheck.path // .parameters.alert.file // empty')"
+
+              if [ -z "$FILENAME" ]; then
+                log "ERROR - Missing filename in active-response JSON"
+                exit 1
+              fi
+
+              if [ ! -x "$CLAMSCAN" ]; then
+                log "ERROR - ClamAV wrapper not executable: $CLAMSCAN"
+                exit 1
+              fi
+
+              if [ ! -f "$FILENAME" ]; then
+                log "ERROR - Scanned file not found: $FILENAME"
+                exit 0
+              fi
+
+              size=-1
+              actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+              while [ "$size" != "$actual_size" ]; do
+                sleep 1
+                size="$actual_size"
+                actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+              done
+
+              set +e
+              scan_output="$($CLAMSCAN --infected --no-summary "$FILENAME" 2>&1)"
+              scan_rc=$?
+              set -e
+
+              case "$scan_rc" in
+                0)
+                  log "INFO - No ClamAV match for $FILENAME"
+                  ;;
+                1)
+                  printf "%s\n" "$scan_output" | while IFS= read -r line; do
+                    [ -n "$line" ] && log "ALERT - Scan result: $line"
+                  done
+                  ;;
+                *)
+                  log "ERROR - ClamAV scan failed for $FILENAME: $scan_output"
+                  ;;
+              esac
+
+              exit 0
+              EOF
+
+              chmod 0750 /agent/active-response/bin/clamav.sh
+              chown 0:999 /agent/active-response/bin/clamav.sh
+
+              echo "[init] ClamAV tools ready:"
+              /opt/clamav-tools/bin-clamscan --version
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+            - name: clamav-tools
+              mountPath: /opt/clamav-tools
+
+        # 4) Write ossec.conf with PASSWORD ENROLLMENT
+        - name: write-ossec-config
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: WAZUH_MANAGER
+              value: "wazuh.wazuh.svc.cluster.local"
+            - name: WAZUH_PORT
+              value: "1514"
+            - name: WAZUH_PROTOCOL
+              value: "tcp"
+            - name: WAZUH_REGISTRATION_SERVER
+              value: "wazuh.wazuh.svc.cluster.local"
+            - name: WAZUH_REGISTRATION_PORT
+              value: "1515"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Writing ossec.conf..."
+              mkdir -p /agent/etc
+
+
+              cat > /agent/etc/ossec.conf <<EOF
+              <ossec_config>
+                <client>
+                  <server>
+                    <address>${WAZUH_MANAGER}</address>
+                    <port>${WAZUH_PORT}</port>
+                    <protocol>${WAZUH_PROTOCOL}</protocol>
+                  </server>
+
+                  <enrollment>
+                    <enabled>yes</enabled>
+                    <agent_name>${NODE_NAME}</agent_name>
+                    <manager_address>${WAZUH_REGISTRATION_SERVER}</manager_address>
+                    <port>${WAZUH_REGISTRATION_PORT}</port>
+                    <authorization_pass_path>/var/ossec/etc/authd.pass</authorization_pass_path>
+                  </enrollment>
+                </client>
+
+                <client_buffer>
+                  <disabled>no</disabled>
+                  <queue_size>5000</queue_size>
+                  <events_per_second>600</events_per_second>
+                </client_buffer>
+
+                <command>
+                  <name>yara_linux0</name>
+                  <executable>yara.sh</executable>
+                  <extra_args>-yara_path /opt/yara-tools/bin -yara_rules /var/ossec/etc/yara/rules/yara_rules.yar</extra_args>
+                  <expect>filename</expect>
+                  <timeout_allowed>no</timeout_allowed>
+                </command>
+                
+                <command>
+                  <name>yara_linux</name>
+                  <executable>yara.sh</executable>
+                  <extra_args>-yara_path /opt/yara-tools/bin -yara_rules /var/ossec/etc/yara/rules/yara_rules.yar</extra_args>
+                  <expect>filename</expect>
+                  <timeout_allowed>no</timeout_allowed>
+                </command>
+
+                <command>
+                  <name>clamav_linux0</name>
+                  <executable>clamav.sh</executable>
+                  <expect>filename</expect>
+                  <timeout_allowed>no</timeout_allowed>
+                </command>
+
+                <command>
+                  <name>clamav_linux</name>
+                  <executable>clamav.sh</executable>
+                  <expect>filename</expect>
+                  <timeout_allowed>no</timeout_allowed>
+                </command>
+
+
+                <sca>
+                  <enabled>yes</enabled>
+                  <scan_on_start>yes</scan_on_start>
+                  <interval>12h</interval>
+                  <skip_nfs>yes</skip_nfs>
+                  <policies>
+                    <policy>/var/ossec/etc/sca/skuld_node_hardening.yml</policy>
+                  </policies>
+                </sca>
+
+                <rootcheck>
+                  <disabled>no</disabled>
+                  <check_unixaudit>yes</check_unixaudit>
+                  <check_files>yes</check_files>
+                  <check_trojans>yes</check_trojans>
+                  <check_dev>yes</check_dev>
+                  <check_sys>yes</check_sys>
+                  <check_pids>yes</check_pids>
+                  <check_ports>yes</check_ports>
+                  <check_if>yes</check_if>
+                  <frequency>43200</frequency>
+                  <rootkit_files>/var/ossec/etc/rootcheck/rootkit_files.txt</rootkit_files>
+                  <rootkit_trojans>/var/ossec/etc/rootcheck/rootkit_trojans.txt</rootkit_trojans>
+                  <system_audit>/var/ossec/etc/rootcheck/system_audit_rcl.txt</system_audit>
+                  <system_audit>/var/ossec/etc/rootcheck/system_audit_ssh.txt</system_audit>
+                  <skip_nfs>yes</skip_nfs>
+                </rootcheck>
+
+                <wodle name="open-scap">
+                  <disabled>yes</disabled>
+                  <timeout>1800</timeout>
+                  <interval>1d</interval>
+                  <scan-on-start>yes</scan-on-start>
+                </wodle>
+
+                <wodle name="cis-cat">
+                  <disabled>yes</disabled>
+                  <timeout>1800</timeout>
+                  <interval>1d</interval>
+                  <scan-on-start>yes</scan-on-start>
+                  <java_path>wodles/java</java_path>
+                  <ciscat_path>wodles/ciscat</ciscat_path>
+                </wodle>
+
+                <wodle name="osquery">
+                  <disabled>yes</disabled>
+                  <run_daemon>yes</run_daemon>
+                  <log_path>/var/log/osquery/osqueryd.results.log</log_path>
+                  <config_path>/etc/osquery/osquery.conf</config_path>
+                  <add_labels>yes</add_labels>
+                </wodle>
+
+                <syscheck>
+                  <disabled>no</disabled>
+                  <frequency>60</frequency>
+                  <scan_on_start>yes</scan_on_start>
+                  <alert_new_files>yes</alert_new_files>
+                  <auto_ignore frequency="10" timeframe="3600">no</auto_ignore>
+                  <skip_nfs>yes</skip_nfs>
+                  <directories check_all="yes" realtime="yes">/host/media/software</directories>
+                  <directories check_all="yes" realtime="yes">/host/etc/passwd,/host/etc/shadow,/host/etc/group,/host/etc/gshadow,/host/etc/sudoers,/host/etc/crontab,/host/etc/ld.so.preload,/host/etc/ld.so.conf,/host/etc/profile,/host/etc/crictl.yaml</directories>
+                  <directories check_all="yes" realtime="yes">/host/etc/sudoers.d,/host/etc/ssh,/host/etc/ssh/sshd_config.d,/host/etc/systemd/system,/host/lib/systemd/system,/host/usr/lib/systemd/system,/host/etc/cron.d,/host/var/spool/cron,/host/var/spool/cron/crontabs,/host/etc/kubernetes,/host/var/lib/kubelet/pki,/host/var/lib/kubelet/config.yaml,/host/var/lib/kubelet/kubeconfig,/host/etc/cni/net.d,/host/etc/containerd,/host/etc/docker,/host/etc/ld.so.conf.d,/host/etc/profile.d</directories>
+                  <directories check_all="yes" realtime="yes">/host/root/.ssh,/host/root/.aws,/host/root/.kube,/host/root/.docker,/host/root/.bashrc,/host/root/.profile,/host/root/.docker/config.json</directories>
+                  <directories check_all="yes" realtime="yes" recursion_level="3">/host/home</directories>
+                  <ignore>/host/etc/mtab</ignore>
+                  <ignore>/host/etc/hosts.deny</ignore>
+                  <ignore>/host/etc/mail/statistics</ignore>
+                  <ignore>/host/etc/random-seed</ignore>
+                  <ignore>/host/etc/random.seed</ignore>
+                  <ignore>/host/etc/adjtime</ignore>
+                  <ignore>/host/etc/httpd/logs</ignore>
+                  <ignore>/host/etc/utmpx</ignore>
+                  <ignore>/host/etc/wtmpx</ignore>
+                  <ignore>/host/etc/cups/certs</ignore>
+                  <ignore>/host/etc/dumpdates</ignore>
+                  <ignore>/host/etc/svc/volatile</ignore>
+                  <ignore>/host/sys/kernel/security</ignore>
+                  <ignore>/host/sys/kernel/debug</ignore>
+                  <nodiff>/host/etc/ssl/private.key</nodiff>
+                  <remove_old_diff>yes</remove_old_diff>
+                  <restart_audit>yes</restart_audit>
+                </syscheck>
+
+                <!-- Log analysis -->
+                <localfile>
+                  <log_format>syslog</log_format>
+                  <location>/var/ossec/logs/active-responses.log</location>
+                </localfile>
+
+                <localfile>
+                  <log_format>syslog</log_format>
+                  <location>/var/log/messages</location>
+                </localfile>
+
+                <localfile>
+                  <log_format>syslog</log_format>
+                  <location>/var/log/auth.log</location>
+                </localfile>
+
+                <localfile>
+                  <log_format>syslog</log_format>
+                  <location>/var/log/syslog</location>
+                </localfile>
+
+                <localfile>
+                  <log_format>command</log_format>
+                  <command>df -P</command>
+                  <frequency>360</frequency>
+                </localfile>
+
+                <localfile>
+                  <log_format>full_command</log_format>
+                  <command>netstat -tan |grep LISTEN |grep -v 127.0.0.1 | sort</command>
+                  <frequency>360</frequency>
+                </localfile>
+                
+                <localfile>
+                  <log_format>json</log_format>
+                  <location>/var/log/falco/events.json</location>
+                </localfile>
+
+                <localfile>
+                  <log_format>full_command</log_format>
+                  <command>last -n 5</command>
+                  <frequency>360</frequency>
+                </localfile>
+
+                <wodle name="syscollector">
+                  <disabled>no</disabled>
+                  <interval>1h</interval>
+                  <scan_on_start>yes</scan_on_start>
+                  <hardware>yes</hardware>
+                  <os>yes</os>
+                  <network>yes</network>
+                  <packages>yes</packages>
+                  <ports all="yes">yes</ports>
+                  <processes>yes</processes>
+                  <users>yes</users>
+                  <groups>yes</groups>
+                  <services>yes</services>
+                  <browser_extensions>yes</browser_extensions>
+                  <synchronization>
+                    <max_eps>10</max_eps>
+                  </synchronization>
+                </wodle>
+              </ossec_config>
+              EOF
+
+              chown 999:999 /agent/etc/ossec.conf
+              chmod 0640 /agent/etc/ossec.conf
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+
+        # 5) Copy authd.pass from Secret and fix ownership
+        - name: fix-authd-pass-perms
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[init] Copying authd.pass from Secret..."
+              mkdir -p /agent/etc
+              cp /secret/authd.pass /agent/etc/authd.pass
+              chown 0:999 /agent/etc/authd.pass
+              chmod 0640 /agent/etc/authd.pass
+              ls -l /agent/etc/authd.pass
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+            - name: wazuh-authd-pass
+              mountPath: /secret/authd.pass
+              subPath: authd.pass
+              readOnly: true
+
+
+      #        MAIN CONTAINER
+      containers:
+        - name: wazuh-agent
+          image: wazuh/wazuh-agent:4.14.5
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+
+              ensure_iptables() {
+                if command -v iptables >/dev/null 2>&1; then
+                  return 0
+                fi
+
+                if command -v iptables-legacy >/dev/null 2>&1; then
+                  ln -sf "$(command -v iptables-legacy)" /usr/sbin/iptables 2>/dev/null || true
+                  command -v iptables >/dev/null 2>&1 && return 0
+                fi
+
+                echo "[agent] iptables not found, installing it inside the container..."
+                if command -v apt-get >/dev/null 2>&1; then
+                  mkdir -p /tmp/apt-cache /tmp/apt-state /tmp/apt-log
+                  apt-get \
+                    -o Dir::Cache=/tmp/apt-cache \
+                    -o Dir::State=/tmp/apt-state \
+                    -o Dir::Log=/tmp/apt-log \
+                    update
+                  DEBIAN_FRONTEND=noninteractive apt-get \
+                    -o Dir::Cache=/tmp/apt-cache \
+                    -o Dir::State=/tmp/apt-state \
+                    -o Dir::Log=/tmp/apt-log \
+                    install -y --no-install-recommends iptables jq
+                elif command -v microdnf >/dev/null 2>&1; then
+                  microdnf --setopt=logdir=/tmp --setopt=cachedir=/tmp/microdnf-cache install -y iptables jq
+                elif command -v dnf >/dev/null 2>&1; then
+                  dnf --setopt=logdir=/tmp --setopt=cachedir=/tmp/dnf-cache install -y iptables jq
+                elif command -v yum >/dev/null 2>&1; then
+                  yum --setopt=logfile=/tmp/yum.log --setopt=cachedir=/tmp/yum-cache install -y iptables jq
+                elif command -v apk >/dev/null 2>&1; then
+                  apk add --no-cache iptables jq
+                else
+                  echo "[agent] No supported package manager found to install iptables" >&2
+                  return 1
+                fi
+
+                command -v iptables >/dev/null 2>&1
+              }
+
+              ensure_iptables
+              if ! command -v jq >/dev/null 2>&1; then
+                echo "[agent] jq not found, installing jq inside the container..."
+                if command -v apt-get >/dev/null 2>&1; then
+                  DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends jq
+                elif command -v microdnf >/dev/null 2>&1; then
+                  microdnf install -y jq
+                elif command -v dnf >/dev/null 2>&1; then
+                  dnf install -y jq
+                elif command -v yum >/dev/null 2>&1; then
+                  yum install -y jq
+                elif command -v apk >/dev/null 2>&1; then
+                  apk add --no-cache jq
+                else
+                  echo "[agent] ERROR: jq is required by yara.sh but no package manager is available" >&2
+                  exit 1
+                fi
+              fi
+              ln -sf /var/ossec/etc/ossec.conf /etc/ossec.conf || true
+              exec /init
+          env:
+            - name: WAZUH_MANAGER
+              value: "wazuh.wazuh.svc.cluster.local"
+            - name: WAZUH_MANAGER_PORT
+              value: "1514"
+            - name: WAZUH_PROTOCOL
+              value: "tcp"
+            - name: WAZUH_REGISTRATION_SERVER
+              value: "wazuh.wazuh.svc.cluster.local"
+            - name: WAZUH_REGISTRATION_PORT
+              value: "1515"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: WAZUH_AGENT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+                - SETGID
+                - SETUID
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+            - name: run-log-journal
+              mountPath: /run/log/journal
+              readOnly: true
+            - name: run-systemd-journal
+              mountPath: /run/systemd/journal
+              readOnly: true
+            - name: machine-id
+              mountPath: /etc/machine-id
+              readOnly: true
+            - name: ossec-data
+              mountPath: /var/ossec
+            - name: yara-tools
+              mountPath: /opt/yara-tools
+              readOnly: true
+            - name: clamav-tools
+              mountPath: /opt/clamav-tools
+              readOnly: true
+            - name: wazuh-sca-policies
+              mountPath: /var/ossec/etc/sca/skuld_node_hardening.yml
+              subPath: skuld_node_hardening.yml
+              readOnly: true
+
+        - name: retention-cleaner
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -eu
+
+              interval="${CLEANUP_INTERVAL_SECONDS:-3600}"
+              keep_days="${WAZUH_LOG_RETENTION_DAYS:-14}"
+              queue_keep_days="${WAZUH_QUEUE_RETENTION_DAYS:-7}"
+              max_wazuh_mb="${MAX_WAZUH_LOG_MB:-50}"
+              max_falco_mb="${MAX_FALCO_EVENTS_MB:-200}"
+              keep_falco_lines="${FALCO_EVENTS_KEEP_LINES:-50000}"
+
+              max_wazuh_bytes=$((max_wazuh_mb * 1024 * 1024))
+              max_falco_bytes=$((max_falco_mb * 1024 * 1024))
+
+              trim_file() {
+                file="$1"
+                max_bytes="$2"
+                keep_lines="$3"
+
+                [ -f "$file" ] || return 0
+                size="$(wc -c < "$file" 2>/dev/null || echo 0)"
+                [ "$size" -gt "$max_bytes" ] || return 0
+
+                tmp="/tmp/$(basename "$file").trim.$$"
+                tail -n "$keep_lines" "$file" > "$tmp" 2>/dev/null || : > "$tmp"
+                cat "$tmp" > "$file"
+                rm -f "$tmp"
+                echo "[retention] trimmed $file from $size bytes"
+              }
+
+              delete_by_age_seconds() {
+                path="$1"
+                age_seconds="$2"
+                now="$(date +%s)"
+
+                find "$path" -type f \( -name "*.gz" -o -name "*.log.*" -o -name "*.json.*" \) 2>/dev/null | while IFS= read -r file; do
+                  mtime="$(stat -c %Y "$file" 2>/dev/null || echo "$now")"
+                  age=$((now - mtime))
+                  if [ "$age" -gt "$age_seconds" ]; then
+                    rm -f "$file" && echo "[retention] deleted $file after ${age}s"
+                  fi
+                done
+              }
+
+              while true; do
+                if [ -n "${WAZUH_LOG_RETENTION_SECONDS:-}" ]; then
+                  delete_by_age_seconds /agent/logs "$WAZUH_LOG_RETENTION_SECONDS"
+                else
+                  find /agent/logs -type f \( -name "*.gz" -o -name "*.log.*" -o -name "*.json.*" \) -mtime +"$keep_days" -delete 2>/dev/null || true
+                fi
+                find /agent/queue/diff /agent/tmp -type f -mtime +"$queue_keep_days" -delete 2>/dev/null || true
+
+                trim_file /agent/logs/ossec.log "$max_wazuh_bytes" 20000
+                trim_file /agent/logs/active-responses.log "$max_wazuh_bytes" 20000
+                trim_file /falco-log/events.json "$max_falco_bytes" "$keep_falco_lines"
+
+                sleep "$interval"
+              done
+          env:
+            - name: CLEANUP_INTERVAL_SECONDS
+              value: "3600"
+            - name: WAZUH_LOG_RETENTION_DAYS
+              value: "14"
+            - name: WAZUH_LOG_RETENTION_SECONDS
+              value: ""
+            - name: WAZUH_QUEUE_RETENTION_DAYS
+              value: "7"
+            - name: MAX_WAZUH_LOG_MB
+              value: "50"
+            - name: MAX_FALCO_EVENTS_MB
+              value: "200"
+            - name: FALCO_EVENTS_KEEP_LINES
+              value: "50000"
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: ossec-data
+              mountPath: /agent
+            - name: falco-log
+              mountPath: /falco-log
+
+
+      #            VOLUMES
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+
+        - name: falco-log
+          hostPath:
+            path: /var/log/falco
+            type: DirectoryOrCreate
+
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+
+        - name: run-log-journal
+          hostPath:
+            path: /run/log/journal
+            type: DirectoryOrCreate
+
+        - name: run-systemd-journal
+          hostPath:
+            path: /run/systemd/journal
+            type: DirectoryOrCreate
+
+        - name: machine-id
+          hostPath:
+            path: /etc/machine-id
+            type: File
+
+        - name: ossec-data
+          hostPath:
+            path: /var/lib/wazuh
+            type: DirectoryOrCreate
+
+        - name: wazuh-authd-pass
+          secret:
+            secretName: wazuh-authd-pass
+
+        - name: yara-tools
+          emptyDir: {}
+
+        - name: clamav-tools
+          emptyDir: {}
+
+        - name: wazuh-sca-policies
+          configMap:
+            name: wazuh-sca-policies

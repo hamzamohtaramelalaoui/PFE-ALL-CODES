@@ -1,0 +1,194 @@
+[
+  {
+    "content": [
+      {
+        "type": "text",
+        "text": {
+          "data": [
+            {
+              "labels": {
+                "app": "mc-intra-config-service",
+                "container": "mc-intra-config-service",
+                "job": "mc-intra/mc-intra-config-service",
+                "namespace": "mc-intra",
+                "node_name": "tokio",
+                "pod": "mc-intra-config-service-84dd9f974c-q7b54",
+                "service_name": "mc-intra-config-service"
+              },
+              "lines": [
+                {
+                  "line": {
+                    "error_message": "I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/eab7ce33-04a4-4895-a937-17a1d4571004\": Connect timed out",
+                    "error_type": "org.springframework.web.client.resourceaccessexception",
+                    "level": "error",
+                    "message": "Unexpected error occurred: I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/eab7ce33-04a4-4895-a937-17a1d4571004\": Connect timed out",
+                    "occurrences": 20,
+                    "path": "/api/deployment/group/uuid/eab7ce33-04a4-4895-a937-17a1d4571004\":",
+                    "timestamps": [
+                      "2026-04-01T18:46:46.927Z",
+                      "2026-04-01T18:46:46.926Z",
+                      "2026-04-01T18:46:46.925Z",
+                      "2026-04-01T18:46:46.924Z",
+                      "2026-04-01T18:46:46.921Z",
+                      "2026-04-01T18:46:06.056Z",
+                      "2026-04-01T18:46:06.050Z",
+                      "2026-04-01T18:46:06.048Z",
+                      "2026-04-01T18:46:06.047Z",
+                      "2026-04-01T18:46:06.046Z",
+                      "2026-04-01T18:46:03.967Z",
+                      "2026-04-01T18:46:03.966Z",
+                      "2026-04-01T18:46:03.958Z",
+                      "2026-04-01T18:46:03.958Z",
+                      "2026-04-01T18:46:03.954Z",
+                      "2026-04-01T18:46:00.772Z",
+                      "2026-04-01T18:46:00.771Z",
+                      "2026-04-01T18:46:00.770Z",
+                      "2026-04-01T18:46:00.769Z",
+                      "2026-04-01T18:46:00.765Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Sending GET request to URL: http://mc-intra-deployment-service/api/deployment/group/uuid/eab7ce33-04a4-4895-a937-17a1d4571004",
+                    "occurrences": 15,
+                    "path": "/api/deployment/group/uuid/eab7ce33-04a4-4895-a937-17a1d4571004",
+                    "timestamps": [
+                      "2026-04-01T18:46:01.950Z",
+                      "2026-04-01T18:46:44.925Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Creating custom headers from properties",
+                    "occurrences": 50,
+                    "timestamps": [
+                      "2026-04-01T18:45:59.930Z",
+                      "2026-04-01T18:46:44.924Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Creating RestTemplate with connectTimeout=2000 and readTimeout=2000",
+                    "occurrences": 45,
+                    "timestamps": [
+                      "2026-04-01T18:45:59.945Z",
+                      "2026-04-01T18:46:44.913Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "error_message": "I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/b0764821-1e1d-4691-ad52-fa1f324e6373\": Connect timed out",
+                    "error_type": "org.springframework.web.client.resourceaccessexception",
+                    "level": "error",
+                    "message": "Unexpected error occurred: I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/b0764821-1e1d-4691-ad52-fa1f324e6373\": Connect timed out",
+                    "occurrences": 15,
+                    "path": "/api/deployment/group/uuid/b0764821-1e1d-4691-ad52-fa1f324e6373\":",
+                    "timestamps": [
+                      "2026-04-01T18:46:44.913Z",
+                      "2026-04-01T18:46:44.910Z",
+                      "2026-04-01T18:46:44.910Z",
+                      "2026-04-01T18:46:44.907Z",
+                      "2026-04-01T18:46:44.907Z",
+                      "2026-04-01T18:46:04.039Z",
+                      "2026-04-01T18:46:04.037Z",
+                      "2026-04-01T18:46:04.032Z",
+                      "2026-04-01T18:46:04.031Z",
+                      "2026-04-01T18:46:04.029Z",
+                      "2026-04-01T18:46:01.944Z",
+                      "2026-04-01T18:46:01.939Z",
+                      "2026-04-01T18:46:01.938Z",
+                      "2026-04-01T18:46:01.935Z",
+                      "2026-04-01T18:46:01.934Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Sending GET request to URL: http://mc-intra-deployment-service/api/deployment/group/uuid/b0764821-1e1d-4691-ad52-fa1f324e6373",
+                    "occurrences": 15,
+                    "path": "/api/deployment/group/uuid/b0764821-1e1d-4691-ad52-fa1f324e6373",
+                    "timestamps": [
+                      "2026-04-01T18:45:59.930Z",
+                      "2026-04-01T18:46:42.908Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "error_message": "I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/ee6abc14-3727-4d39-ab58-1233bf169969\": Connect timed out",
+                    "error_type": "org.springframework.web.client.resourceaccessexception",
+                    "level": "error",
+                    "message": "Unexpected error occurred: I/O error on GET request for \"http://mc-intra-deployment-service/api/deployment/group/uuid/ee6abc14-3727-4d39-ab58-1233bf169969\": Connect timed out",
+                    "occurrences": 10,
+                    "path": "/api/deployment/group/uuid/ee6abc14-3727-4d39-ab58-1233bf169969\":",
+                    "timestamps": [
+                      "2026-04-01T18:46:42.894Z",
+                      "2026-04-01T18:46:42.894Z",
+                      "2026-04-01T18:46:42.893Z",
+                      "2026-04-01T18:46:42.893Z",
+                      "2026-04-01T18:46:42.893Z",
+                      "2026-04-01T18:46:02.003Z",
+                      "2026-04-01T18:46:01.995Z",
+                      "2026-04-01T18:46:01.998Z",
+                      "2026-04-01T18:46:01.995Z",
+                      "2026-04-01T18:46:01.993Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Sending GET request to URL: http://mc-intra-deployment-service/api/deployment/group/uuid/ee6abc14-3727-4d39-ab58-1233bf169969",
+                    "occurrences": 10,
+                    "path": "/api/deployment/group/uuid/ee6abc14-3727-4d39-ab58-1233bf169969",
+                    "timestamps": [
+                      "2026-04-01T18:45:59.991Z",
+                      "2026-04-01T18:46:40.880Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Received response with status code: 200 OK",
+                    "occurrences": 10,
+                    "timestamps": [
+                      "2026-04-01T18:45:59.975Z",
+                      "2026-04-01T18:46:40.867Z"
+                    ]
+                  }
+                },
+                {
+                  "line": {
+                    "level": "info",
+                    "message": "Sending GET request to URL: http://mc-intra-user-service/api/user/getByEmail/hamza.mohtaremelalaoui@izemx.com",
+                    "occurrences": 10,
+                    "path": "/api/user/getByEmail/hamza.mohtaremelalaoui@izemx.com",
+                    "timestamps": [
+                      "2026-04-01T18:45:59.957Z",
+                      "2026-04-01T18:46:40.852Z"
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "metadata": {
+            "linesReturned": 200,
+            "maxLinesAllowed": 200,
+            "resultsTruncated": true,
+            "totalLinesScanned": 276
+          }
+        }
+      }
+    ]
+  }
+]

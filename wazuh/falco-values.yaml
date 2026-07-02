@@ -1,0 +1,1057 @@
+controller:
+  kind: daemonset
+
+driver:
+  kind: auto
+
+collectors:
+  kubernetes:
+    enabled: true
+
+falco:
+  priority: warning
+
+  rules_files:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/rules.d
+
+  json_output: true
+  json_include_output_property: false
+  json_include_message_property: false
+  json_include_output_fields_property: true
+  json_include_tags_property: true
+  buffered_outputs: false
+
+  stdout_output:
+    enabled: true
+
+  syslog_output:
+    enabled: false
+
+  file_output:
+    enabled: true
+    keep_alive: true
+    filename: /var/log/falco/events.json
+
+falcoctl:
+  config:
+    artifact:
+      install:
+        refs:
+          - falco-rules:5
+      follow:
+        refs:
+          - falco-rules:5
+
+mounts:
+  volumes:
+    - name: falco-host-log
+      hostPath:
+        path: /var/log/falco
+        type: DirectoryOrCreate
+
+  volumeMounts:
+    - name: falco-host-log
+      mountPath: /var/log/falco
+
+falcosidekick:
+  enabled: true
+
+  config:
+    debug: false
+
+  webui:
+    enabled: true
+
+  service:
+    type: ClusterIP
+
+  webuiService:
+    type: LoadBalancer
+
+customRules:
+  falco_rules.local.yaml: |-
+    - list: trusted_namespaces
+      items: [kube-system, falco, wazuh, monitoring, ingress-nginx]
+
+    - list: app_sensitive_namespaces
+      items: [default, production, staging, prod, client]
+
+    - list: shell_binaries
+      items: [sh, bash, dash, zsh, ash]
+
+    - list: network_tools
+      items: [nc, ncat, netcat, socat, telnet, curl, wget, openssl]
+
+    - list: reverse_shell_tools
+      items: [nc, ncat, netcat, socat]
+
+    - list: firewall_tools
+      items: [iptables, ip6tables, nft, ufw, firewall-cmd]
+
+    - list: host_user_group_tools
+      items: [useradd, adduser, usermod, userdel, deluser, passwd, chpasswd, groupadd, groupmod, groupdel, gpasswd, visudo, su, sudo]
+
+    - list: host_permission_tools
+      items: [chmod, chown, chgrp, setfacl, getfacl]
+
+    - list: host_service_tools
+      items: [systemctl, service, chkconfig, update-rc.d, rc-service, initctl]
+
+    - list: host_mount_tools
+      items: [mount, umount, losetup, modprobe, insmod, rmmod]
+
+    - list: destructive_tools
+      items: [rm, shred, dd, mkfs, wipefs]
+
+    - list: package_managers
+      items: [apt, apt-get, yum, dnf, apk, rpm, dpkg, pip, pip3, npm]
+
+    - list: crypto_mining_binaries
+      items: [xmrig, xmrig-notls, minerd, cpuminer, cpuminer-multi, kinsing, kdevtmpfsi, kswapd0, kthreaddi, masscan]
+
+    - list: archive_tools
+      items: [tar, zip, gzip, bzip2, xz, 7z, 7za, rar]
+
+    - list: database_dump_tools
+      items: [mysqldump, mysqlpump, pg_dump, pg_dumpall, mongoexport, mongodump, redis-cli, sqlite3]
+
+    - list: cloud_sync_tools
+      items: [rclone, aws, gsutil, az, scp, sftp, rsync]
+
+    - list: process_injection_tools
+      items: [gdb, gdbserver, strace, ltrace, perf, bpftrace, frida-server]
+
+    - list: privilege_escalation_tools
+      items: [sudo, su, setpriv, unshare, nsenter, capsh, pkexec]
+
+    - list: suspicious_parent_processes
+      items: [java, node, python, python3, php, php-fpm, nginx, apache2, httpd, gunicorn, uwsgi]
+
+    - list: sensitive_identity_files
+      items: [/etc/passwd, /etc/shadow, /etc/group, /etc/gshadow, /etc/sudoers]
+
+    - list: sensitive_exfil_files
+      items: [/etc/shadow, /etc/gshadow, /etc/sudoers]
+
+    - list: trusted_firewall_parents
+      items: [kubelet, kube-proxy, calico-node, calico-felix, felix, containerd, dockerd]
+
+    - list: trusted_wazuh_firewall_parents
+      items: [wazuh-execd, firewall-drop, host-deny, route-null]
+
+    - list: trusted_host_mount_parents
+      items: [kubelet, containerd, dockerd, systemd, systemd-udevd]
+
+    - list: trusted_host_sensitive_read_processes
+      items: [sshd, cron, crond, login, systemd, systemd-logind]
+
+    - macro: in_trusted_namespace
+      condition: k8s.ns.name in (trusted_namespaces)
+
+    - macro: in_sensitive_app_namespace
+      condition: k8s.ns.name in (app_sensitive_namespaces)
+
+    - macro: not_in_trusted_namespace
+      condition: not in_trusted_namespace
+
+    - macro: kubelet_iptables_canary
+      condition: >
+        proc.pname = kubelet
+        and proc.name in (iptables, ip6tables)
+        and proc.cmdline contains KUBE-KUBELET-CANARY
+
+    - macro: trusted_kubernetes_firewall_activity
+      condition: >
+        kubelet_iptables_canary
+        or proc.pname in (trusted_firewall_parents)
+
+    - macro: trusted_wazuh_firewall_activity
+      condition: >
+        proc.name in (firewall_tools)
+        and (
+          k8s.ns.name = wazuh
+          or proc.pname in (trusted_wazuh_firewall_parents)
+          or proc.pcmdline contains "wazuh-execd"
+          or proc.pcmdline contains "firewall-drop"
+          or proc.pcmdline contains "/var/ossec/active-response/bin/firewall-drop"
+        )
+
+    - macro: trusted_host_mount_activity
+      condition: >
+        container.id = host
+        and proc.name in (host_mount_tools)
+        and (
+          proc.pname in (trusted_host_mount_parents)
+          or proc.pcmdline contains "kubelet "
+          or proc.pcmdline contains "containerd "
+          or proc.pcmdline contains "dockerd "
+          or proc.cmdline contains "/var/lib/kubelet/pods/"
+          or proc.cmdline contains "kubernetes.io~projected"
+          or proc.cmdline contains "volume-subpaths"
+          or proc.cmdline contains "kube-api-access"
+          or proc.cmdline contains "netdev-"
+          or proc.cmdline = "modprobe -q -- "
+        )
+
+    - macro: trusted_kubernetes_node_process
+      condition: >
+        container.id = host
+        and proc.name in (kubelet, kube-apiserver, kube-controller-manager, kube-scheduler, containerd, dockerd)
+
+    - macro: trusted_runtime_host_file_read
+      condition: >
+        container.id = host
+        and (
+          proc.name in (runc, containerd, containerd-shim, containerd-shim-runc-v2, crun)
+          or proc.pname in (runc, containerd, containerd-shim, containerd-shim-runc-v2, crun)
+          or proc.cmdline startswith "runc:["
+          or proc.pcmdline contains "/run/containerd/"
+          or proc.pcmdline contains "/run/containerd/runc/k8s.io"
+        )
+
+    - macro: trusted_host_sensitive_file_read
+      condition: >
+        container.id = host
+        and (
+          trusted_runtime_host_file_read
+          or proc.name in (trusted_host_sensitive_read_processes)
+        )
+
+    - macro: reverse_shell_tool_cmd
+      condition: >
+        proc.name in (reverse_shell_tools)
+        or proc.cmdline startswith "nc "
+        or proc.cmdline startswith "ncat "
+        or proc.cmdline startswith "netcat "
+        or proc.cmdline startswith "socat "
+        or proc.cmdline contains " nc "
+        or proc.cmdline contains " ncat "
+        or proc.cmdline contains " netcat "
+        or proc.cmdline contains " socat "
+
+    - macro: network_tool_cmd
+      condition: >
+        proc.name in (network_tools)
+        or proc.cmdline startswith "nc "
+        or proc.cmdline startswith "ncat "
+        or proc.cmdline startswith "netcat "
+        or proc.cmdline startswith "socat "
+        or proc.cmdline startswith "telnet "
+        or proc.cmdline startswith "curl "
+        or proc.cmdline startswith "wget "
+        or proc.cmdline startswith "openssl "
+        or proc.cmdline contains " nc "
+        or proc.cmdline contains " ncat "
+        or proc.cmdline contains " netcat "
+        or proc.cmdline contains " socat "
+        or proc.cmdline contains " telnet "
+        or proc.cmdline contains " curl "
+        or proc.cmdline contains " wget "
+        or proc.cmdline contains " openssl "
+
+    - macro: crypto_mining_cmd
+      condition: >
+        proc.name in (crypto_mining_binaries)
+        or proc.cmdline contains "stratum+tcp"
+        or proc.cmdline contains "stratum+ssl"
+        or proc.cmdline contains "pool.minexmr"
+        or proc.cmdline contains "xmrpool"
+        or proc.cmdline contains "nanopool"
+        or proc.cmdline contains "nicehash"
+        or proc.cmdline contains "monerohash"
+        or proc.cmdline contains "supportxmr"
+        or proc.cmdline contains "minexmr"
+
+    - macro: exfil_staging_tool_cmd
+      condition: >
+        proc.name in (archive_tools)
+        or proc.name in (database_dump_tools)
+        or proc.name in (cloud_sync_tools)
+
+    - macro: sensitive_exfil_file_read
+      condition: >
+        fd.name in (sensitive_exfil_files)
+        or fd.name startswith /etc/sudoers.d
+        or fd.name contains /.ssh/id_rsa
+        or fd.name contains /.ssh/id_ed25519
+        or fd.name contains /.ssh/config
+        or fd.name contains /.aws/credentials
+        or fd.name contains /.aws/config
+        or fd.name contains /.config/gcloud
+        or fd.name contains /azureProfile.json
+        or fd.name contains /.kube/config
+        or fd.name contains /var/run/secrets/kubernetes.io/serviceaccount/token
+
+    - macro: suspicious_shell_from_app_process
+      condition: >
+        proc.pname in (suspicious_parent_processes)
+        and proc.name in (shell_binaries)
+
+    - macro: suspicious_tool_from_app_process
+      condition: >
+        proc.pname in (suspicious_parent_processes)
+        and (
+          proc.name in (network_tools)
+          or proc.name in (reverse_shell_tools)
+          or proc.name in (destructive_tools)
+          or proc.name in (package_managers)
+          or proc.name in (process_injection_tools)
+          or proc.name in (privilege_escalation_tools)
+        )
+
+    - rule: Drop and execute new binary in container
+      exceptions:
+        - name: allow_wazuh_security_tool_installers
+          fields: [k8s.ns.name, container.name]
+          comps: [=, in]
+          values:
+            - [wazuh, [install-yara-tools, install-clamav-tools, install-yara-local-config, install-clamav-local-config]]
+        - name: allow_wazuh_namespace_active_response_helpers
+          fields: [k8s.ns.name]
+          comps: [=]
+          values:
+            - [wazuh]
+      override:
+        exceptions: append
+
+    - rule: Read sensitive file untrusted
+      exceptions:
+        - name: allow_wazuh_namespace_sensitive_reads
+          fields: [k8s.ns.name]
+          comps: [=]
+          values:
+            - [wazuh]
+      override:
+        exceptions: append
+
+    - rule: Ptrace Or Debugger Tool Executed In Container
+      desc: Debugging or process-injection tool executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name in (process_injection_tools)
+      output: >
+        Debug/process-injection tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, process_injection, ptrace, privilege_escalation]
+
+    - rule: Ptrace Or Debugger Tool Executed On Host
+      desc: Debugging or process-injection tool executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (process_injection_tools)
+      output: >
+        Debug/process-injection tool executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, process_injection, ptrace, privilege_escalation, command_monitoring]
+
+    - rule: Ptrace Syscall Detected In Container
+      desc: Ptrace syscall used inside a container
+      condition: >
+        evt.type = ptrace
+        and container.id != host
+        and not_in_trusted_namespace
+      output: >
+        Ptrace syscall detected in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag evt=%evt.type args=%evt.args)
+      priority: CRITICAL
+      tags: [container, ptrace, process_injection]
+
+    - rule: Ptrace Syscall Detected On Host
+      desc: Ptrace syscall used directly on host
+      condition: >
+        evt.type = ptrace
+        and container.id = host
+      output: >
+        Ptrace syscall detected on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id evt=%evt.type args=%evt.args)
+      priority: WARNING
+      tags: [host, ptrace, process_injection, command_monitoring]
+
+    - rule: LD Preload File Modified In Container
+      desc: LD_PRELOAD persistence file modified inside a container
+      condition: >
+        open_write
+        and container.id != host
+        and not_in_trusted_namespace
+        and fd.name = /etc/ld.so.preload
+      output: >
+        LD_PRELOAD file modified in container
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, ld_preload, persistence, process_injection]
+
+    - rule: LD Preload File Modified On Host
+      desc: LD_PRELOAD persistence file modified directly on host
+      condition: >
+        open_write
+        and container.id = host
+        and fd.name = /etc/ld.so.preload
+      output: >
+        LD_PRELOAD file modified on host
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, ld_preload, persistence, process_injection, command_monitoring]
+
+    - rule: LD Preload Environment Used In Container
+      desc: Process started with LD_PRELOAD in command line inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.cmdline contains "LD_PRELOAD="
+      output: >
+        LD_PRELOAD environment usage in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, ld_preload, process_injection]
+
+    - rule: LD Preload Environment Used On Host
+      desc: Process started with LD_PRELOAD in command line directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.cmdline contains "LD_PRELOAD="
+      output: >
+        LD_PRELOAD environment usage on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, ld_preload, process_injection, command_monitoring]
+
+    - rule: Suspicious App Process Spawned Shell
+      desc: Application process spawned a shell
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and suspicious_shell_from_app_process
+      output: >
+        Suspicious app process spawned shell
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, command_injection, process_abuse]
+
+    - rule: Suspicious App Process Spawned Dangerous Tool
+      desc: Application process spawned a dangerous tool
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and suspicious_tool_from_app_process
+      output: >
+        Suspicious app process spawned dangerous tool
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, command_injection, process_abuse]
+
+    - rule: Privilege Escalation Tool Executed In Container
+      desc: Privilege escalation helper executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name in (privilege_escalation_tools)
+      output: >
+        Privilege escalation tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, privilege_escalation, command_monitoring]
+
+    - rule: Privilege Escalation Tool Executed On Host
+      desc: Privilege escalation helper executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (privilege_escalation_tools)
+      output: >
+        Privilege escalation tool executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, privilege_escalation, command_monitoring]
+
+    - rule: SUID Or SGID Permission Change On Host
+      desc: Command attempted to set SUID or SGID permissions directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name = chmod
+        and (
+          proc.cmdline contains "+s"
+          or proc.cmdline contains " 4755"
+          or proc.cmdline contains " 2755"
+          or proc.cmdline contains " 6755"
+        )
+      output: >
+        SUID/SGID permission change on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, privilege_escalation, permissions, command_monitoring]
+
+    - rule: SUID Or SGID Permission Change In Container
+      desc: Command attempted to set SUID or SGID permissions inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name = chmod
+        and (
+          proc.cmdline contains "+s"
+          or proc.cmdline contains " 4755"
+          or proc.cmdline contains " 2755"
+          or proc.cmdline contains " 6755"
+        )
+      output: >
+        SUID/SGID permission change in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, privilege_escalation, permissions]
+
+    - rule: Sensitive Identity File Modified On Host
+      desc: Sensitive identity or sudoers file modified directly on host
+      condition: >
+        open_write
+        and container.id = host
+        and (
+          fd.name in (sensitive_identity_files)
+          or fd.name startswith /etc/sudoers.d
+        )
+      output: >
+        Sensitive identity file modified on host
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, privilege_escalation, identity, persistence, command_monitoring]
+
+    - rule: Sensitive Identity File Modified In Container
+      desc: Sensitive identity or sudoers file modified inside a container
+      condition: >
+        open_write
+        and container.id != host
+        and not_in_trusted_namespace
+        and (
+          fd.name in (sensitive_identity_files)
+          or fd.name startswith /etc/sudoers.d
+        )
+      output: >
+        Sensitive identity file modified in container
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, privilege_escalation, identity, persistence]
+
+    - rule: Shell Spawned In Untrusted Container
+      desc: Shell spawned inside a non-trusted Kubernetes namespace
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (shell_binaries)
+        and not_in_trusted_namespace
+      output: >
+        Shell spawned in untrusted container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, shell, mitre_execution]
+
+    - rule: Shell Spawned In Sensitive Container
+      desc: Shell spawned inside a sensitive application namespace
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (shell_binaries)
+        and in_sensitive_app_namespace
+      output: >
+        Shell spawned in sensitive container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, shell, mitre_execution]
+
+    - rule: Java Process Spawned Shell
+      desc: Java application spawned a shell, possible command injection
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.pname = java
+        and proc.name in (shell_binaries)
+        and not_in_trusted_namespace
+      output: >
+        Java process spawned shell
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, command_injection, mitre_execution]
+
+    - rule: Reverse Shell Tool Executed
+      desc: Common reverse shell utility executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and reverse_shell_tool_cmd
+      output: >
+        Possible reverse shell tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, reverse_shell, mitre_command_and_control]
+
+    - rule: Network Tool Executed In App Container
+      desc: Network tool executed inside an application container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and network_tool_cmd
+      output: >
+        Network tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, network, reverse_shell]
+
+    - rule: Reverse Shell Tool Executed On Host
+      desc: Common reverse shell utility executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and reverse_shell_tool_cmd
+      output: >
+        Possible reverse shell tool executed directly on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, reverse_shell, command_monitoring]
+
+    - rule: Network Tool Executed On Host
+      desc: Network tool executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and network_tool_cmd
+      output: >
+        Network tool executed directly on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, network, command_monitoring]
+
+    - rule: Host User Or Group Management Command
+      desc: User or group management command executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (host_user_group_tools)
+      output: >
+        User/group management command executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, user_management, privilege, command_monitoring]
+
+    - rule: Host Permission Or Ownership Change
+      desc: Permission or ownership command executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (host_permission_tools)
+      output: >
+        Permission/ownership command executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, permissions, privilege, command_monitoring]
+
+    - rule: Host Service Control Command
+      desc: Service/system control command executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (host_service_tools)
+      output: >
+        Service control command executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, service_control, persistence, command_monitoring]
+
+    - rule: Host Mount Or Kernel Module Command
+      desc: Mount or kernel module related command executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (host_mount_tools)
+        and not trusted_host_mount_activity
+      output: >
+        Mount/kernel command executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, kernel, mount, privilege, command_monitoring]
+
+    - rule: Shell With Outbound Connection
+      desc: Shell process opened an outbound network connection
+      condition: >
+        outbound
+        and container.id != host
+        and proc.name in (shell_binaries)
+        and not_in_trusted_namespace
+      output: >
+        Shell opened outbound connection
+        (user=%user.name command=%proc.cmdline connection=%fd.name
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [network, reverse_shell, mitre_command_and_control]
+
+    - rule: Firewall Tool Executed In Container
+      desc: Firewall command executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (firewall_tools)
+        and not_in_trusted_namespace
+        and not trusted_wazuh_firewall_activity
+      output: >
+        Firewall tool executed inside container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, firewall, defense_evasion]
+
+    - rule: Unexpected Firewall Tool Executed On Host
+      desc: Firewall command executed on host by unexpected parent process
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (firewall_tools)
+        and not trusted_kubernetes_firewall_activity
+        and not trusted_wazuh_firewall_activity
+      output: >
+        Unexpected firewall tool executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, firewall, defense_evasion, command_monitoring]
+
+    - rule: Dangerous Admin Tool In Container
+      desc: Dangerous administration command executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (host_user_group_tools, host_permission_tools, host_service_tools, host_mount_tools)
+        and not_in_trusted_namespace
+      output: >
+        Dangerous admin tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, privilege, defense_evasion]
+
+    - rule: Destructive Tool Executed In Container
+      desc: Destructive filesystem-related command executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (destructive_tools)
+        and not_in_trusted_namespace
+      output: >
+        Destructive tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, destructive_command, defense_evasion]
+
+    - rule: Destructive Tool Executed On Host
+      desc: Destructive filesystem-related command executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (destructive_tools)
+      output: >
+        Destructive tool executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, destructive_command, command_monitoring]
+
+    - rule: Execution From Temp Directory In Container
+      desc: Process executed from temporary directory inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and (proc.exe startswith /tmp
+             or proc.exe startswith /var/tmp
+             or proc.exe startswith /dev/shm
+             or evt.arg.filename startswith /tmp
+             or evt.arg.filename startswith /var/tmp
+             or evt.arg.filename startswith /dev/shm
+             or proc.exepath startswith /tmp
+             or proc.exepath startswith /var/tmp
+             or proc.exepath startswith /dev/shm)
+        and not_in_trusted_namespace
+      output: >
+        Process executed from temp directory in container
+        (user=%user.name command=%proc.cmdline exe=%proc.exepath parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, execution, suspicious_path]
+
+    - rule: Execution From Temp Directory On Host
+      desc: Process executed from temporary directory directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and (proc.exe startswith /tmp
+             or proc.exe startswith /var/tmp
+             or proc.exe startswith /dev/shm
+             or evt.arg.filename startswith /tmp
+             or evt.arg.filename startswith /var/tmp
+             or evt.arg.filename startswith /dev/shm
+             or proc.exepath startswith /tmp
+             or proc.exepath startswith /var/tmp
+             or proc.exepath startswith /dev/shm)
+      output: >
+        Process executed from temp directory on host
+        (user=%user.name command=%proc.cmdline exe=%proc.exepath parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, execution, suspicious_path, command_monitoring]
+
+    - rule: Sensitive Persistence File Modified In Container
+      desc: Sensitive persistence-related file modified inside a container
+      condition: >
+        open_write
+        and container.id != host
+        and (fd.name startswith /etc/cron
+             or fd.name startswith /etc/systemd/system
+             or fd.name contains /.ssh/authorized_keys
+             or fd.name = /etc/ld.so.preload
+             or fd.name = /etc/profile
+             or fd.name = /etc/bash.bashrc)
+        and not_in_trusted_namespace
+      output: >
+        Sensitive persistence file modified in container
+        (user=%user.name command=%proc.cmdline file=%fd.name
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, persistence, filesystem, mitre_persistence]
+
+    - rule: Sensitive Persistence File Modified On Host
+      desc: Sensitive persistence-related file modified directly on host
+      condition: >
+        open_write
+        and container.id = host
+        and (fd.name startswith /etc/cron
+             or fd.name startswith /etc/systemd/system
+             or fd.name contains /.ssh/authorized_keys
+             or fd.name = /etc/ld.so.preload
+             or fd.name = /etc/profile
+             or fd.name = /etc/bash.bashrc)
+      output: >
+        Sensitive persistence file modified on host
+        (user=%user.name command=%proc.cmdline file=%fd.name
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, persistence, filesystem, command_monitoring]
+
+    - rule: Package Manager In Container
+      desc: Package manager executed inside an untrusted container
+      condition: >
+        spawned_process
+        and container.id != host
+        and proc.name in (package_managers)
+        and not_in_trusted_namespace
+      output: >
+        Package manager executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, package_management, defense_evasion]
+
+    - rule: Package Manager On Host
+      desc: Package manager executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and proc.name in (package_managers)
+      output: >
+        Package manager executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, package_management, command_monitoring]
+
+    - rule: Kubernetes Sensitive File Access
+      desc: Kubernetes sensitive config or credential file accessed by unexpected process
+      condition: >
+        open_read
+        and (fd.name startswith /etc/kubernetes
+             or fd.name contains /.kube/config
+             or fd.name contains /var/lib/kubelet/pki
+             or fd.name contains /var/run/secrets/kubernetes.io/serviceaccount/token)
+        and not trusted_kubernetes_node_process
+        and not_in_trusted_namespace
+      output: >
+        Kubernetes sensitive file accessed by unexpected process
+        (user=%user.name command=%proc.cmdline file=%fd.name
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [kubernetes, credential_access, filesystem]
+
+    - rule: Crypto Miner Executed In Container
+      desc: Known crypto mining binary or mining pool indicator executed inside a container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and crypto_mining_cmd
+      output: >
+        Crypto mining indicator executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, crypto_mining, resource_hijacking, command_monitoring]
+
+    - rule: Crypto Miner Executed On Host
+      desc: Known crypto mining binary or mining pool indicator executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and crypto_mining_cmd
+      output: >
+        Crypto mining indicator executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, crypto_mining, resource_hijacking, command_monitoring]
+
+    - rule: Exfiltration Archive Tool In Container
+      desc: Archive or compression tool executed inside an application container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name in (archive_tools)
+      output: >
+        Archive tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: WARNING
+      tags: [container, data_exfiltration, collection, archive, command_monitoring]
+
+    - rule: Exfiltration Database Dump Tool In Container
+      desc: Database dump or export utility executed inside an application container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name in (database_dump_tools)
+      output: >
+        Database dump/export tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, data_exfiltration, database_dump, collection, command_monitoring]
+
+    - rule: Exfiltration Cloud Sync Tool In Container
+      desc: Cloud sync or remote copy utility executed inside an application container
+      condition: >
+        spawned_process
+        and container.id != host
+        and not_in_trusted_namespace
+        and proc.name in (cloud_sync_tools)
+      output: >
+        Cloud sync or remote copy tool executed in container
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, data_exfiltration, cloud_sync, command_monitoring]
+
+    - rule: Sensitive File Read For Possible Exfiltration In Container
+      desc: Sensitive credential or identity file read inside an application container
+      condition: >
+        open_read
+        and container.id != host
+        and not_in_trusted_namespace
+        and sensitive_exfil_file_read
+      output: >
+        Sensitive file read in container for possible exfiltration
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        namespace=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        image=%container.image.repository:%container.image.tag)
+      priority: CRITICAL
+      tags: [container, data_exfiltration, credential_access, filesystem]
+
+    - rule: Sensitive File Read For Possible Exfiltration On Host
+      desc: Sensitive credential or identity file read directly on host by an unexpected process
+      condition: >
+        open_read
+        and container.id = host
+        and sensitive_exfil_file_read
+        and not trusted_kubernetes_node_process
+        and not trusted_host_sensitive_file_read
+      output: >
+        Sensitive file read on host for possible exfiltration
+        (user=%user.name command=%proc.cmdline file=%fd.name parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: CRITICAL
+      tags: [host, data_exfiltration, credential_access, filesystem, command_monitoring]
+
+    - rule: Exfiltration Staging Tool On Host
+      desc: Archive, database dump, cloud sync, or remote copy utility executed directly on host
+      condition: >
+        spawned_process
+        and container.id = host
+        and exfil_staging_tool_cmd
+      output: >
+        Exfiltration staging or transfer tool executed on host
+        (user=%user.name command=%proc.cmdline parent=%proc.pcmdline
+        container=%container.name container_id=%container.id)
+      priority: WARNING
+      tags: [host, data_exfiltration, collection, command_monitoring]

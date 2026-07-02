@@ -1,0 +1,29 @@
+# Copyright (C) 2019, Wazuh Inc.
+#
+# This program is a free software; you can redistribute it
+# and/or modify it under the terms of the GNU General Public
+# License (version 2) as published by the FSF - Free Software
+# Foundation.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-dashboard
+  namespace: wazuh
+spec:
+  template:
+    spec:
+      volumes:
+        - name: dashboard-wazuh-config
+          secret:
+            secretName: dashboard-wazuh-config
+      containers:
+        - name: wazuh-dashboard
+          volumeMounts:
+            - name: dashboard-wazuh-config
+              mountPath: /usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+              subPath: wazuh.yml
+              readOnly: true
+          env:
+            - name: WAZUH_API_URL
+              value: https://wazuh

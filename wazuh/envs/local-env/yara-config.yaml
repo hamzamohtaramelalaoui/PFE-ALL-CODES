@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-agent-yara
+  namespace: wazuh
+data:
+  yara.sh: |
+    #!/bin/sh
+    # Wazuh YARA active response for Kubernetes hostPath-monitored files.
+    set -u
+
+    LOG_FILE="/var/ossec/logs/active-responses.log"
+    export LD_LIBRARY_PATH="/opt/yara-tools/lib:${LD_LIBRARY_PATH:-}"
+    YARA_PATH="/opt/yara-tools/bin"
+    YARA_RULES="/var/ossec/etc/yara/rules/yara_rules.yar"
+
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -yara_path)
+          YARA_PATH="${2:-}"
+          shift 2
+          ;;
+        -yara_rules)
+          YARA_RULES="${2:-}"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+
+    if [ -z "$YARA_PATH" ]; then
+      YARA_PATH="/opt/yara-tools/bin"
+    fi
+
+    if [ -z "$YARA_RULES" ]; then
+      YARA_RULES="/var/ossec/etc/yara/rules/yara_rules.yar"
+    fi
+
+    if [ -x "$YARA_PATH/yara" ]; then
+      YARA_BIN="$YARA_PATH/yara"
+    else
+      YARA_BIN="$(command -v yara || true)"
+    fi
+
+    if [ -z "$YARA_BIN" ] || [ ! -x "$YARA_BIN" ]; then
+      echo "wazuh-yara: ERROR - Yara binary not found." >> "$LOG_FILE"
+      exit 1
+    fi
+
+    if [ ! -r "$YARA_RULES" ]; then
+      echo "wazuh-yara: ERROR - Yara rules file not readable: $YARA_RULES" >> "$LOG_FILE"
+      exit 1
+    fi
+
+    INPUT_JSON="$(cat)"
+
+    if [ -x /opt/yara-tools/bin/jq ]; then
+      FILENAME="$(printf '%s' "$INPUT_JSON" | /opt/yara-tools/bin/jq -r '.parameters.alert.syscheck.path // empty' 2>/dev/null || true)"
+    elif command -v jq >/dev/null 2>&1; then
+      FILENAME="$(printf '%s' "$INPUT_JSON" | jq -r '.parameters.alert.syscheck.path // empty' 2>/dev/null || true)"
+    else
+      FILENAME="$(printf '%s' "$INPUT_JSON" | tr -d '\n' | sed -n 's/.*"syscheck"[^{]*{[^}]*"path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+    fi
+
+    if [ -z "$FILENAME" ]; then
+      echo "wazuh-yara: ERROR - No syscheck file path found in active response alert." >> "$LOG_FILE"
+      exit 1
+    fi
+
+    if [ ! -f "$FILENAME" ] || [ ! -r "$FILENAME" ]; then
+      echo "wazuh-yara: INFO - Skipping unreadable or non-regular file: $FILENAME" >> "$LOG_FILE"
+      exit 0
+    fi
+
+    size=0
+    actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+    while [ "$size" != "$actual_size" ]; do
+      sleep 1
+      size="$actual_size"
+      actual_size="$(stat -c %s "$FILENAME" 2>/dev/null || echo 0)"
+    done
+
+    yara_output="$("$YARA_BIN" "$YARA_RULES" "$FILENAME" 2>&1)"
+    yara_status="$?"
+
+    if [ "$yara_status" -ne 0 ] && [ -n "$yara_output" ]; then
+      echo "wazuh-yara: ERROR - $yara_output" >> "$LOG_FILE"
+      exit "$yara_status"
+    fi
+
+    if [ -n "$yara_output" ]; then
+      printf '%s\n' "$yara_output" | while IFS= read -r line; do
+        echo "wazuh-yara: INFO - Scan result: $line" >> "$LOG_FILE"
+      done
+    fi
+
+    exit 0
+  yara_rules.yar: |
+    rule EICAR_Test_File
+    {
+      strings:
+        $eicar = "EICAR-STANDARD-ANTIVIRUS-TEST-FILE" ascii
+      condition:
+        $eicar
+    }
+
+    rule Suspicious_Shell_Reverse_TCP
+    {
+      meta:
+        description = "Detects common reverse shell command fragments"
+        severity = "medium"
+      strings:
+        $bash_tcp = "/dev/tcp/" ascii
+        $nc_exec = "nc -e" ascii nocase
+        $mkfifo_shell = "mkfifo" ascii nocase
+      condition:
+        any of them
+    }
+
+    rule Suspicious_ELF_Packer_Strings
+    {
+      meta:
+        description = "Detects common Linux packer or dropper strings"
+        severity = "medium"
+      strings:
+        $upx0 = "UPX0" ascii
+        $upx1 = "UPX1" ascii
+        $ld_preload = "LD_PRELOAD" ascii
+      condition:
+        any of them
+    }

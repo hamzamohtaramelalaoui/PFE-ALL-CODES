@@ -1,0 +1,137 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: clamav
+  namespace: wazuh
+  labels:
+    app: clamav
+spec:
+  selector:
+    matchLabels:
+      app: clamav
+  template:
+    metadata:
+      labels:
+        app: clamav
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsUser: 0
+      initContainers:
+        - name: prepare-clamav-paths
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              mkdir -p /clamav-db /clamav-log
+              touch /clamav-log/clamav-scan.log /host-var-log/syslog
+              chmod 0755 /clamav-db /clamav-log
+              chmod 0644 /clamav-log/clamav-scan.log /host-var-log/syslog
+          volumeMounts:
+            - name: clamav-db
+              mountPath: /clamav-db
+            - name: clamav-log
+              mountPath: /clamav-log
+            - name: host-var-log
+              mountPath: /host-var-log
+      containers:
+        - name: clamav
+          image: clamav/clamav:stable
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+
+              SCAN_INTERVAL_SECONDS="${SCAN_INTERVAL_SECONDS:-21600}"
+              SCAN_LOG="/var/log/clamav/clamav-scan.log"
+              SYSLOG="/host/var/log/syslog"
+
+              mkdir -p /var/log/clamav /var/lib/clamav
+              touch "$SCAN_LOG" "$SYSLOG"
+
+              run_freshclam() {
+                echo "$(date '+%b %d %H:%M:%S') $(hostname) freshclam[$$]: $(date '+%a %b %d %H:%M:%S %Y') -> ClamAV update process started at $(date '+%a %b %d %H:%M:%S %Y')" >> "$SYSLOG"
+                freshclam --datadir=/var/lib/clamav --stdout >> "$SCAN_LOG" 2>&1 || \
+                  echo "$(date '+%b %d %H:%M:%S') $(hostname) freshclam[$$]: $(date '+%a %b %d %H:%M:%S %Y') -> FreshClam update failed" >> "$SYSLOG"
+              }
+
+              scan_path() {
+                path="$1"
+                [ -e "$path" ] || return 0
+
+                tmp_output=/tmp/clamav-scan.out
+                : > "$tmp_output"
+
+                clamscan \
+                  --database=/var/lib/clamav \
+                  --recursive=yes \
+                  --infected \
+                  --no-summary \
+                  --cross-fs=no \
+                  "$path" > "$tmp_output" 2>&1 || true
+
+                cat "$tmp_output" >> "$SCAN_LOG"
+
+                while IFS= read -r line; do
+                  [ -n "$line" ] || continue
+                  echo "$(date '+%b %d %H:%M:%S') $(hostname) clamd[$$]: $(date '+%a %b %d %H:%M:%S %Y') -> $line" >> "$SYSLOG"
+                done < "$tmp_output"
+              }
+
+              run_freshclam
+
+              while true; do
+                echo "$(date '+%b %d %H:%M:%S') $(hostname) clamav: Starting scheduled node malware scan" >> "$SYSLOG"
+                scan_path /host/tmp
+                scan_path /host/var/tmp
+                scan_path /host/dev/shm
+                scan_path /host/home
+                echo "$(date '+%b %d %H:%M:%S') $(hostname) clamav: Finished scheduled node malware scan" >> "$SYSLOG"
+                sleep "$SCAN_INTERVAL_SECONDS"
+                run_freshclam
+              done
+          env:
+            - name: SCAN_INTERVAL_SECONDS
+              value: "21600"
+          securityContext:
+            privileged: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 1
+              memory: 2Gi
+          volumeMounts:
+            - name: clamav-db
+              mountPath: /var/lib/clamav
+            - name: clamav-log
+              mountPath: /var/log/clamav
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+            - name: host-var-log
+              mountPath: /host/var/log
+      volumes:
+        - name: clamav-db
+          hostPath:
+            path: /var/lib/clamav
+            type: DirectoryOrCreate
+        - name: clamav-log
+          hostPath:
+            path: /var/log/clamav
+            type: DirectoryOrCreate
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: host-var-log
+          hostPath:
+            path: /var/log
+            type: Directory

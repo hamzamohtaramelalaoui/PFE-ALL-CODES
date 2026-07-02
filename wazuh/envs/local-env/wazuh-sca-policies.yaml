@@ -1,0 +1,138 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-sca-policies
+  namespace: wazuh
+data:
+  skuld_node_hardening.yml: |
+    policy:
+      id: "skuld_node_hardening"
+      file: "skuld_node_hardening.yml"
+      name: "Skuld Kubernetes node hardening checks"
+      description: "Host-mounted Linux node SCA checks for SSH, sudo, UID 0 accounts, and local user or group exposure."
+      regex_type: "pcre2"
+      
+    requirements:
+      title: "Linux node files are visible through the Wazuh agent host mount"
+      description: "The policy runs from the privileged Kubernetes Wazuh agent and checks host files under /host."
+      condition: any
+      rules:
+        - 'f:/host/etc/passwd'
+        - 'f:/host/etc/group'
+        - 'f:/host/etc/sudoers'
+        - 'f:/host/etc/ssh/sshd_config'
+
+    variables:
+      $host_passwd: /host/etc/passwd
+      $host_group: /host/etc/group
+      $host_shadow: /host/etc/shadow
+      $host_sshd_config: /host/etc/ssh/sshd_config
+
+    checks:
+      - id: 190000
+        title: "SSH root login must not be explicitly enabled"
+        description: "Detects an uncommented PermitRootLogin yes setting in the node SSH daemon configuration."
+        rationale: "Direct SSH root login increases the blast radius of credential theft and brute-force access."
+        remediation: "Set PermitRootLogin no or prohibit-password in /etc/ssh/sshd_config and reload sshd."
+        condition: none
+        rules:
+          - 'f:$host_sshd_config -> !r:^\s*# && r:^\s*PermitRootLogin\s+yes\b'
+
+      - id: 190001
+        title: "SSH password authentication must not be explicitly enabled"
+        description: "Detects an uncommented PasswordAuthentication yes setting in the node SSH daemon configuration."
+        rationale: "Password-based SSH access is more exposed to brute force and credential reuse than key-based access."
+        remediation: "Set PasswordAuthentication no in /etc/ssh/sshd_config and reload sshd after confirming key access."
+        condition: none
+        rules:
+          - 'f:$host_sshd_config -> !r:^\s*# && r:^\s*PasswordAuthentication\s+yes\b'
+
+      - id: 190002
+        title: "SSH empty passwords must be disabled"
+        description: "Detects an uncommented PermitEmptyPasswords yes setting in the node SSH daemon configuration."
+        rationale: "Accounts with empty passwords must never be accepted for remote SSH authentication."
+        remediation: "Set PermitEmptyPasswords no in /etc/ssh/sshd_config and reload sshd."
+        condition: none
+        rules:
+          - 'f:$host_sshd_config -> !r:^\s*# && r:^\s*PermitEmptyPasswords\s+yes\b'
+
+      - id: 190003
+        title: "SSH X11 forwarding must not be explicitly enabled"
+        description: "Detects an uncommented X11Forwarding yes setting in the node SSH daemon configuration."
+        rationale: "X11 forwarding broadens the remote attack surface and is rarely required for Kubernetes worker nodes."
+        remediation: "Set X11Forwarding no in /etc/ssh/sshd_config and reload sshd."
+        condition: none
+        rules:
+          - 'f:$host_sshd_config -> !r:^\s*# && r:^\s*X11Forwarding\s+yes\b'
+
+      - id: 190004
+        title: "SSH MaxAuthTries should be 4 or less when configured"
+        description: "Detects an uncommented MaxAuthTries value greater than 4."
+        rationale: "Lowering authentication attempts reduces online guessing opportunities."
+        remediation: "Set MaxAuthTries 4 or lower in /etc/ssh/sshd_config and reload sshd."
+        condition: none
+        rules:
+          - 'f:$host_sshd_config -> !r:^\s*# && n:^\s*MaxAuthTries\s+(\d+) compare > 4'
+
+      - id: 190010
+        title: "Root must be the only account with UID 0"
+        description: "Detects any non-root account in /etc/passwd with UID 0."
+        rationale: "Additional UID 0 accounts are root-equivalent and bypass normal privilege boundaries."
+        remediation: "Remove the account, change its UID, or investigate it as a possible persistence mechanism."
+        condition: none
+        rules:
+          - 'f:$host_passwd -> !r:^# && !r:^root: && r:^[^:]+:[^:]*:0:'
+
+      - id: 190011
+        title: "Accounts with empty password fields must not exist"
+        description: "Detects local accounts with an empty password field in /etc/passwd."
+        rationale: "Empty password fields can indicate an unsafe local account configuration."
+        remediation: "Lock or remove the account, or migrate password data to shadow with proper locking."
+        condition: none
+        rules:
+          - 'f:$host_passwd -> !r:^# && r:^[^:]+::'
+
+      - id: 190012
+        title: "Login-capable system accounts should be reviewed"
+        description: "Detects low-UID local accounts with interactive shells."
+        rationale: "System accounts generally should not allow interactive login unless explicitly required."
+        remediation: "Set the shell to /usr/sbin/nologin or /bin/false for service accounts that do not require login."
+        condition: none
+        rules:
+          - 'f:$host_passwd -> !r:^# && !r:^root: && r:^[^:]+:[^:]*:[0-9]{1,3}: && r:/(ba|da|z|a)?sh$'
+
+      - id: 190020
+        title: "Sudo NOPASSWD entries must not be present"
+        description: "Detects uncommented NOPASSWD sudoers entries in /etc/sudoers or /etc/sudoers.d."
+        rationale: "Passwordless sudo provides immediate full escalation when an allowed account is compromised."
+        remediation: "Remove NOPASSWD or scope it to the minimum command set needed, then validate with visudo."
+        condition: none
+        rules:
+          - 'c:sh -c "grep -RhsE \"^[[:space:]]*[^#].*NOPASSWD\" /host/etc/sudoers /host/etc/sudoers.d 2>/dev/null" -> r:.+'
+
+      - id: 190021
+        title: "Full sudo access entries should be reviewed"
+        description: "Detects uncommented sudoers entries that grant ALL command access."
+        rationale: "Broad sudo rules make local privilege escalation easier and should be tightly controlled."
+        remediation: "Limit sudoers entries to named commands where possible and validate changes with visudo."
+        condition: none
+        rules:
+          - 'c:sh -c "grep -RhsE \"^[[:space:]]*[^#]+[[:space:]]+ALL=\\((ALL|ALL:ALL)\\)[[:space:]]+ALL\" /host/etc/sudoers /host/etc/sudoers.d 2>/dev/null" -> r:.+'
+
+      - id: 190022
+        title: "Unrestricted sudo group entries should be reviewed"
+        description: "Detects sudo or wheel group rules with full ALL command access."
+        rationale: "Group-wide full sudo grants every member administrative control of the node."
+        remediation: "Review membership in sudo and wheel groups and narrow the sudoers policy if possible."
+        condition: none
+        rules:
+          - 'c:sh -c "grep -RhsE \"^[[:space:]]*%(sudo|wheel)[[:space:]]+ALL=\\((ALL|ALL:ALL)\\)[[:space:]]+ALL\" /host/etc/sudoers /host/etc/sudoers.d 2>/dev/null" -> r:.+'
+
+      - id: 190030
+        title: "Shadow password file should exist"
+        description: "Checks that /etc/shadow exists on the node."
+        rationale: "Modern Linux systems should store password hashes in /etc/shadow, not directly in /etc/passwd."
+        remediation: "Investigate the node image and ensure shadow password support is enabled."
+        condition: all
+        rules:
+          - 'f:$host_shadow'

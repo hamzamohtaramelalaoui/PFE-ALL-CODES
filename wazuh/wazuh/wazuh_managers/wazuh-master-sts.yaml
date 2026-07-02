@@ -1,0 +1,903 @@
+# Copyright (C) 2019, Wazuh Inc.
+#
+# This program is a free software; you can redistribute it
+# and/or modify it under the terms of the GNU General Public
+# License (version 2) as published by the FSF - Free Software
+# Foundation.
+
+# Wazuh master StatefulSet
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager-master
+  namespace: wazuh
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wazuh-manager
+      node-type: master
+  serviceName: wazuh-cluster
+  podManagementPolicy: Parallel
+  template:
+    metadata:
+      labels:
+        app: wazuh-manager
+        node-type: master
+      name: wazuh-manager-master
+    spec:
+      volumes:
+        - name: config
+          configMap:
+            name: wazuh-conf
+        - name: filebeat-certs
+          secret:
+            secretName: indexer-certs
+        - name: wazuh-authd-pass
+          secret:
+            secretName: wazuh-authd-pass
+      securityContext:
+        fsGroup: 101
+      initContainers:
+        - name: repair-ossec-etc
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              mkdir -p /manager-etc/shared/default /manager-etc/rules /manager-etc/decoders
+              touch /manager-etc/shared/ar.conf /manager-etc/shared/default/merged.mg
+              chown -R 0:101 /manager-etc/shared /manager-etc/rules /manager-etc/decoders
+              chmod 0770 /manager-etc/shared /manager-etc/shared/default
+              chmod 0750 /manager-etc/rules /manager-etc/decoders
+              chmod 0640 /manager-etc/shared/ar.conf
+              chmod 0660 /manager-etc/shared/default/merged.mg
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /manager-etc
+              subPath: wazuh/var/ossec/etc
+        - name: install-custom-discord
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              cat > /manager-integrations/custom-discord <<'EOF'
+              #!/bin/sh
+              set -u
+
+              ALERT_FILE="${1:-}"
+              WEBHOOK_URL="${3:-}"
+
+              if [ -z "$ALERT_FILE" ] || [ ! -f "$ALERT_FILE" ]; then
+                echo "custom-discord: missing alert file" >&2
+                exit 1
+              fi
+
+              if [ -z "$WEBHOOK_URL" ]; then
+                echo "custom-discord: missing Discord webhook URL" >&2
+                exit 1
+              fi
+
+              ALERT_JSON="$(cat "$ALERT_FILE")"
+
+              json_value() {
+                echo "$ALERT_JSON" | grep -o "\"$1\":\"[^\"]*\"" | head -n1 | cut -d'"' -f4
+              }
+
+              json_number() {
+                echo "$ALERT_JSON" | grep -o "\"$1\":[0-9]*" | head -n1 | cut -d':' -f2
+              }
+
+              json_escape() {
+                sed \
+                  -e 's/\\/\\\\/g' \
+                  -e 's/"/\\"/g' \
+                  -e ':a;N;$!ba;s/\r//g;s/\n/\\n/g'
+              }
+
+              RULE_ID="$(json_value id)"
+              RULE_DESC="$(json_value description)"
+              LEVEL="$(json_number level)"
+              AGENT="$(json_value name)"
+              SRCIP="$(json_value srcip)"
+              FULL_LOG="$(json_value full_log)"
+
+              MESSAGE="Wazuh Alert
+              Rule: ${RULE_ID:-N/A}
+              Level: ${LEVEL:-N/A}
+              Description: ${RULE_DESC:-N/A}
+              Agent: ${AGENT:-N/A}
+              Source IP: ${SRCIP:-N/A}
+              Log: ${FULL_LOG:-N/A}"
+
+              PAYLOAD="{\"content\":\"$(printf '%s' "$MESSAGE" | json_escape)\"}"
+
+              curl -sS \
+                -H "Content-Type: application/json" \
+                -X POST \
+                -d "$PAYLOAD" \
+                "$WEBHOOK_URL"
+
+              exit 0
+              EOF
+              sed -i 's/^              //' /manager-integrations/custom-discord
+              chown 0:101 /manager-integrations/custom-discord
+              chmod 0750 /manager-integrations/custom-discord
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /manager-integrations
+              subPath: wazuh/var/ossec/integrations
+        - name: install-falco-local-rules
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              rules_file=/manager-etc/rules/local_rules.xml
+              tmp_file=/tmp/local_rules.xml
+
+              mkdir -p /manager-etc/rules
+              touch "$rules_file"
+
+              awk '
+                /<!-- BEGIN MANAGED FALCO RULES -->/ { skip = 1; next }
+                /<!-- END MANAGED FALCO RULES -->/ { skip = 0; next }
+                skip == 0 { print }
+              ' "$rules_file" > "$tmp_file"
+
+              cat >> "$tmp_file" <<'EOF'
+
+              <!-- BEGIN MANAGED FALCO RULES -->
+              <group name="falco,container_security,">
+
+                <rule id="110099" level="0">
+                  <decoded_as>json</decoded_as>
+                  <field name="output_fields.k8s.ns.name">wazuh</field>
+                  <description>Ignore Falco events from Wazuh namespace</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110100" level="5">
+                  <decoded_as>json</decoded_as>
+                  <field name="source">syscall</field>
+                  <field name="priority">Warning|Critical|Error|Notice|Informational</field>
+                  <description>Falco alert: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110101" level="12">
+                  <if_sid>110100</if_sid>
+                  <field name="priority">Critical</field>
+                  <description>Falco critical alert: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110102" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="priority">Error</field>
+                  <description>Falco error alert: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110103" level="8">
+                  <if_sid>110100</if_sid>
+                  <field name="priority">Warning</field>
+                  <description>Falco warning alert: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110104" level="12">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Read sensitive file untrusted</field>
+                  <description>Falco sensitive file read: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110105" level="12">
+                  <if_sid>110100</if_sid>
+                  <field name="tags">mitre_credential_access</field>
+                  <description>Falco credential access behavior: $(rule)</description>
+                  <options>no_full_log</options>
+                </rule>
+                
+                <rule id="110106" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Java Process Spawned Shell</field>
+                  <description>Falco critical: possible command injection in Java container</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110107" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Reverse Shell Tool Executed</field>
+                  <description>Falco critical: possible reverse shell tool executed</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110108" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Firewall Tool Executed In Container</field>
+                  <description>Falco critical: firewall tool executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110109" level="12">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive Persistence File Modified</field>
+                  <description>Falco critical: persistence-related file modified</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110110" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Drop and execute new binary in container</field>
+                  <description>Falco critical: dropped binary executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+                
+                <rule id="110111" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Network Tool Executed In App Container</field>
+                  <description>Falco network tool executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110113" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Network Tool Executed On Host</field>
+                  <description>Falco network tool executed directly on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110114" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Reverse Shell Tool Executed On Host</field>
+                  <description>Falco possible reverse shell tool executed directly on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110115" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Host User Or Group Management Command</field>
+                  <description>Falco user/group management command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110116" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Host Permission Or Ownership Change</field>
+                  <description>Falco permission/ownership command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110117" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Host Service Control Command</field>
+                  <description>Falco service control command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110118" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Host Mount Or Kernel Module Command</field>
+                  <description>Falco mount/kernel module command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110119" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Unexpected Firewall Tool Executed On Host</field>
+                  <description>Falco firewall command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110120" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Destructive Tool Executed On Host</field>
+                  <description>Falco destructive command executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110141" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Destructive Tool Executed In Container</field>
+                  <description>Falco destructive command executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110121" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Execution From Temp Directory On Host</field>
+                  <description>Falco process executed from temp directory on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110140" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Execution From Temp Directory In Container</field>
+                  <description>Falco process executed from temp directory in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110122" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive Persistence File Modified On Host</field>
+                  <description>Falco sensitive persistence file modified on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110123" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Package Manager On Host</field>
+                  <description>Falco package manager executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+                
+                
+                <rule id="110124" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Ptrace Or Debugger Tool Executed In Container</field>
+                  <description>Falco process injection/debugger tool executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110125" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Ptrace Or Debugger Tool Executed On Host</field>
+                  <description>Falco process injection/debugger tool executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110126" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Ptrace Syscall Detected In Container</field>
+                  <description>Falco ptrace syscall detected in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110127" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Ptrace Syscall Detected On Host</field>
+                  <description>Falco ptrace syscall detected on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110128" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">LD Preload File Modified In Container</field>
+                  <description>Falco LD_PRELOAD file modified in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110129" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">LD Preload File Modified On Host</field>
+                  <description>Falco LD_PRELOAD file modified on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110130" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">LD Preload Environment Used In Container</field>
+                  <description>Falco LD_PRELOAD environment used in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110131" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">LD Preload Environment Used On Host</field>
+                  <description>Falco LD_PRELOAD environment used on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110132" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Suspicious App Process Spawned Shell</field>
+                  <description>Falco suspicious app process spawned shell: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110133" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Suspicious App Process Spawned Dangerous Tool</field>
+                  <description>Falco suspicious app process spawned dangerous tool: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110134" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Privilege Escalation Tool Executed In Container</field>
+                  <description>Falco privilege escalation tool executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110135" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Privilege Escalation Tool Executed On Host</field>
+                  <description>Falco privilege escalation tool executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110136" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">SUID Or SGID Permission Change On Host</field>
+                  <description>Falco SUID/SGID permission change on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110137" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">SUID Or SGID Permission Change In Container</field>
+                  <description>Falco SUID/SGID permission change in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110138" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive Identity File Modified On Host</field>
+                  <description>Falco sensitive identity file modified on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110139" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive Identity File Modified In Container</field>
+                  <description>Falco sensitive identity file modified in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110150" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Crypto Miner Executed In Container</field>
+                  <description>Falco crypto mining indicator executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110151" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Crypto Miner Executed On Host</field>
+                  <description>Falco crypto mining indicator executed directly on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110152" level="13">
+                  <if_sid>110110</if_sid>
+                  <field name="output_fields.proc.name">xmrig|xmrig-notls|minerd|cpuminer|cpuminer-multi|kinsing|kdevtmpfsi|kswapd0|kthreaddi|masscan</field>
+                  <description>Falco crypto mining binary dropped and executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110153" level="13">
+                  <if_sid>110103</if_sid>
+                  <field name="output_fields.proc.cmdline">stratum|pool.minexmr|xmrpool|nanopool|nicehash|monerohash|supportxmr|minexmr</field>
+                  <description>Falco crypto mining pool indicator in container command line: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110170" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Exfiltration Archive Tool In Container</field>
+                  <description>Falco possible exfiltration staging archive tool in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110171" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Exfiltration Database Dump Tool In Container</field>
+                  <description>Falco possible database dump for exfiltration in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110172" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Exfiltration Cloud Sync Tool In Container</field>
+                  <description>Falco cloud sync or remote copy tool executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110176" level="13">
+                  <if_sid>110110</if_sid>
+                  <field name="output_fields.proc.name">mysqldump|mysqlpump|pg_dump|pg_dumpall|mongoexport|mongodump|redis-cli|sqlite3</field>
+                  <description>Falco database dump/export tool dropped and executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110177" level="13">
+                  <if_sid>110110</if_sid>
+                  <field name="output_fields.proc.name">rclone|aws|gsutil|az|scp|sftp|rsync</field>
+                  <description>Falco cloud sync or remote copy tool dropped and executed in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110173" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive File Read For Possible Exfiltration In Container</field>
+                  <description>Falco sensitive file read for possible exfiltration in container: $(output_fields.k8s.pod.name)</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110174" level="13">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Sensitive File Read For Possible Exfiltration On Host</field>
+                  <description>Falco sensitive file read for possible exfiltration on host</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="110175" level="10">
+                  <if_sid>110100</if_sid>
+                  <field name="rule">Exfiltration Staging Tool On Host</field>
+                  <description>Falco possible exfiltration staging or transfer tool executed on host</description>
+                  <options>no_full_log</options>
+                </rule>
+                
+                <rule id="110900" level="0">
+                  <if_sid>110118</if_sid>
+                  <field name="output_fields.proc.pcmdline">kubelet</field>
+                  <description>Ignore expected kubelet host mount noise from Falco</description>
+                </rule>
+
+                <rule id="110901" level="0">
+                  <if_sid>110118</if_sid>
+                  <field name="output_fields.proc.cmdline">modprobe -q -- netdev-</field>
+                  <description>Ignore expected host modprobe netdev noise from Falco</description>
+                </rule>
+
+                <rule id="110902" level="0">
+                  <if_sid>110118</if_sid>
+                  <field name="output_fields.proc.cmdline">modprobe -q -- </field>
+                  <description>Ignore expected host modprobe probe noise from Falco</description>
+                </rule>
+                 
+
+              </group>
+              <!-- END MANAGED FALCO RULES -->
+              
+              
+              <!-- BEGIN MANAGED KUBERNETES AUDIT RULES -->
+
+              <group name="kubernetes,audit,">
+
+                <!-- Base Kubernetes audit event -->
+                <rule id="120000" level="0">
+                  <decoded_as>json</decoded_as>
+                  <field name="apiVersion">audit.k8s.io/v1</field>
+                  <description>Kubernetes audit event</description>
+                </rule>
+
+                <!-- kubectl exec / attach / port-forward -->
+                <rule id="120010" level="10">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create</field>
+                  <field name="objectRef.subresource">exec|attach|portforward</field>
+                  <description>Kubernetes interactive access: $(objectRef.subresource) on $(objectRef.resource)/$(objectRef.name) by $(user.username)</description>
+                  <group>kubernetes_audit,interactive_access,</group>
+                </rule>
+
+                <!-- Secret read -->
+                <rule id="120020" level="12">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">get|list|watch</field>
+                  <field name="objectRef.resource">secrets</field>
+                  <description>Kubernetes secret access by $(user.username): $(verb) secret $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,secrets,credential_access,</group>
+                </rule>
+
+                <!-- Secret create/update/delete -->
+                <rule id="120021" level="12">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create|update|patch|delete|deletecollection</field>
+                  <field name="objectRef.resource">secrets</field>
+                  <description>Kubernetes secret modified by $(user.username): $(verb) $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,secrets,</group>
+                </rule>
+
+                <!-- ConfigMap modified -->
+                <rule id="120030" level="8">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create|update|patch|delete|deletecollection</field>
+                  <field name="objectRef.resource">configmaps</field>
+                  <description>Kubernetes ConfigMap modified by $(user.username): $(verb) $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,configmaps,</group>
+                </rule>
+
+                <!-- Workload changed -->
+                <rule id="120040" level="8">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create|update|patch|delete|deletecollection</field>
+                  <field name="objectRef.resource">pods|deployments|daemonsets|statefulsets|jobs|cronjobs</field>
+                  <description>Kubernetes workload changed by $(user.username): $(verb) $(objectRef.resource) $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,workload_change,</group>
+                </rule>
+
+                <!-- RBAC changed -->
+                <rule id="120050" level="13">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create|update|patch|delete|deletecollection</field>
+                  <field name="objectRef.resource">roles|rolebindings|clusterroles|clusterrolebindings</field>
+                  <description>Kubernetes RBAC changed by $(user.username): $(verb) $(objectRef.resource) $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,rbac,privilege_escalation,</group>
+                </rule>
+
+                <!-- Cluster-admin binding -->
+                <rule id="120051" level="15">
+                  <if_sid>120000</if_sid>
+                  <field name="objectRef.resource">clusterrolebindings|rolebindings</field>
+                  <match>cluster-admin</match>
+                  <description>Kubernetes cluster-admin binding activity by $(user.username)</description>
+                  <group>kubernetes_audit,rbac,cluster_admin,privilege_escalation,</group>
+                </rule>
+
+                <!-- ServiceAccount token creation -->
+                <rule id="120060" level="12">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">create</field>
+                  <field name="objectRef.subresource">token</field>
+                  <description>Kubernetes service account token created by $(user.username) for $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,serviceaccount,credential_access,</group>
+                </rule>
+
+                <!-- Admission denied / forbidden -->
+                <rule id="120070" level="9">
+                  <if_sid>120000</if_sid>
+                  <field name="responseStatus.code">401|403</field>
+                  <description>Kubernetes API unauthorized/forbidden request by $(user.username): $(verb) $(objectRef.resource) $(objectRef.namespace)/$(objectRef.name)</description>
+                  <group>kubernetes_audit,auth_failure,</group>
+                </rule>
+
+                <!-- Namespace deleted -->
+                <rule id="120080" level="14">
+                  <if_sid>120000</if_sid>
+                  <field name="verb">delete</field>
+                  <field name="objectRef.resource">namespaces</field>
+                  <description>Kubernetes namespace deleted by $(user.username): $(objectRef.name)</description>
+                  <group>kubernetes_audit,destructive,namespace,</group>
+                </rule>
+
+              </group>
+
+              <!-- END MANAGED KUBERNETES AUDIT RULES -->
+              
+              
+              EOF
+
+              sed -i 's/^              //' "$tmp_file"
+              cp "$tmp_file" "$rules_file"
+              chown 0:101 "$rules_file"
+              chmod 0660 "$rules_file"
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /manager-etc
+              subPath: wazuh/var/ossec/etc
+        - name: install-yara-local-config
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              rules_file=/manager-etc/rules/local_rules.xml
+              decoders_file=/manager-etc/decoders/local_decoder.xml
+              tmp_rules=/tmp/local_rules.xml
+              tmp_decoders=/tmp/local_decoder.xml
+
+              mkdir -p /manager-etc/rules /manager-etc/decoders
+              touch "$rules_file" "$decoders_file"
+
+              awk '
+                /<!-- BEGIN MANAGED YARA RULES -->/ { skip = 1; next }
+                /<!-- END MANAGED YARA RULES -->/ { skip = 0; next }
+                skip == 0 { print }
+              ' "$rules_file" > "$tmp_rules"
+
+              cat >> "$tmp_rules" <<'EOF'
+
+              <!-- BEGIN MANAGED YARA RULES -->
+
+              <group name="syscheck,">
+                <rule id="100200" level="7">
+                  <if_sid>550</if_sid>
+                  <field name="file">/host/media/software</field>
+                  <description>File modified in /host/media/software directory.</description>
+                </rule>
+                <rule id="100201" level="7">
+                  <if_sid>554</if_sid>
+                  <field name="file">/host/media/software</field>
+                  <description>File added to /host/media/software directory.</description>
+                </rule>
+              </group>
+
+              <group name="yara,">
+                <rule id="108000" level="0">
+                  <decoded_as>yara_decoder</decoded_as>
+                  <description>YARA scan result grouping rule</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="108001" level="12">
+                  <if_sid>108000</if_sid>
+                  <description>File "$(yara_scanned_file)" is a positive match. YARA rule: $(yara_rule)</description>
+                </rule>
+              </group>
+
+
+              <!-- BEGIN MANAGED CLAMAV RULES -->
+              <group name="clamav,malware,">
+                <rule id="108100" level="0">
+                  <decoded_as>clamav_decoder</decoded_as>
+                  <description>ClamAV scan result grouping rule</description>
+                  <options>no_full_log</options>
+                </rule>
+
+                <rule id="108101" level="12">
+                  <if_sid>108100</if_sid>
+                  <description>File "$(clamav_scanned_file)" is infected. ClamAV signature: $(clamav_signature)</description>
+                </rule>
+              </group>
+              <!-- END MANAGED CLAMAV RULES -->
+
+              <!-- END MANAGED YARA RULES -->
+              EOF
+
+              awk '
+                /<!-- BEGIN MANAGED YARA DECODERS -->/ { skip = 1; next }
+                /<!-- END MANAGED YARA DECODERS -->/ { skip = 0; next }
+                skip == 0 { print }
+              ' "$decoders_file" > "$tmp_decoders"
+
+              cat >> "$tmp_decoders" <<'EOF'
+
+              <!-- BEGIN MANAGED YARA DECODERS -->
+
+              <decoder name="yara_decoder">
+                <prematch type="pcre2">^wazuh-yara: INFO - Scan result:</prematch>
+                <regex type="pcre2">^wazuh-yara: INFO - Scan result: ([^ ]+) (.+)$</regex>
+                <order>yara_rule,yara_scanned_file</order>
+              </decoder>
+
+              <!-- BEGIN MANAGED CLAMAV DECODERS -->
+              <decoder name="clamav_decoder">
+                <prematch type="pcre2">^wazuh-clamav: ALERT - Scan result:</prematch>
+                <regex type="pcre2">^wazuh-clamav: ALERT - Scan result: (.+): (.+) FOUND$</regex>
+                <order>clamav_scanned_file,clamav_signature</order>
+              </decoder>
+              <!-- END MANAGED CLAMAV DECODERS -->
+
+              <!-- END MANAGED YARA DECODERS -->
+              EOF
+
+              sed -i 's/^              //' "$tmp_rules"
+              sed -i 's/^              //' "$tmp_decoders"
+              cp "$tmp_rules" "$rules_file"
+              cp "$tmp_decoders" "$decoders_file"
+              chown 0:101 "$rules_file" "$decoders_file"
+              chmod 0660 "$rules_file" "$decoders_file"
+          volumeMounts:
+            - name: wazuh-manager-master
+              mountPath: /manager-etc
+              subPath: wazuh/var/ossec/etc
+      containers:
+        - name: wazuh-manager
+          image: 'wazuh/wazuh-manager:4.14.5'
+          resources:
+            requests:
+              cpu: 1
+              memory: 1Gi
+            limits:
+              cpu: 2
+              memory: 2Gi
+          securityContext:
+            capabilities:
+              add: ["SYS_CHROOT"]
+          volumeMounts:
+            - name: config
+              mountPath: /wazuh-config-mount/etc/ossec.conf
+              subPath: master.conf
+              readOnly: true
+            - name: filebeat-certs
+              mountPath: /etc/ssl/root-ca.pem
+              readOnly: true
+              subPath: root-ca.pem
+            - name: filebeat-certs
+              mountPath: /etc/ssl/filebeat.pem
+              subPath: filebeat.pem
+              readOnly: true
+            - name: filebeat-certs
+              mountPath: /etc/ssl/filebeat.key
+              subPath: filebeat-key.pem
+              readOnly: true
+            - name: wazuh-authd-pass
+              mountPath: /wazuh-config-mount/etc/authd.pass
+              subPath: authd.pass
+              readOnly: true
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/api/configuration
+              subPath: wazuh/var/ossec/api/configuration
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/etc
+              subPath: wazuh/var/ossec/etc
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/logs
+              subPath: wazuh/var/ossec/logs
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/queue
+              subPath: wazuh/var/ossec/queue
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/var/multigroups
+              subPath: wazuh/var/ossec/var/multigroups
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/integrations
+              subPath: wazuh/var/ossec/integrations
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/active-response/bin
+              subPath: wazuh/var/ossec/active-response/bin
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/agentless
+              subPath: wazuh/var/ossec/agentless
+            - name: wazuh-manager-master
+              mountPath: /var/ossec/wodles
+              subPath: wazuh/var/ossec/wodles
+            - name: wazuh-manager-master
+              mountPath: /etc/filebeat
+              subPath: filebeat/etc/filebeat
+            - name: wazuh-manager-master
+              mountPath: /var/lib/filebeat
+              subPath: filebeat/var/lib/filebeat
+          ports:
+            - containerPort: 1515
+              name: registration
+            - containerPort: 1516
+              name: cluster
+            - containerPort: 55000
+              name: api
+          env:
+            - name: INDEXER_URL
+              value: 'https://indexer:9200'
+            - name: INDEXER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: indexer-cred
+                  key: username
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: indexer-cred
+                  key: password
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: 'full'
+            - name: SSL_CERTIFICATE_AUTHORITIES
+              value: /etc/ssl/root-ca.pem
+            - name: SSL_CERTIFICATE
+              value: /etc/ssl/filebeat.pem
+            - name: SSL_KEY
+              value: /etc/ssl/filebeat.key
+            - name: API_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-api-cred
+                  key: username
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-api-cred
+                  key: password
+            - name: WAZUH_CLUSTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-cluster-key
+                  key: key
+  volumeClaimTemplates:
+    - metadata:
+        name: wazuh-manager-master
+        namespace: wazuh
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: wazuh-storage
+        resources:
+          requests:
+            storage: 50Gi
