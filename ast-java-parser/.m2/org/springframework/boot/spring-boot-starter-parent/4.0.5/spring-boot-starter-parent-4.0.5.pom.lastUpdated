@@ -1,0 +1,4 @@
+#NOTE: This is a Maven Resolver internal implementation file, its format can be changed without prior notice.
+#Tue Apr 28 03:33:52 GMT+01:00 2026
+4edcd9a9e26e153cb916845ae2fda64e62d5d057@default-nexus-https\://repo.mc-git.com/repository/maven-group/.lastUpdated=1777343632191
+https\://repo.mc-git.com/repository/maven-group/.error=Could not transfer artifact org.springframework.boot\:spring-boot-starter-parent\:pom\:4.0.5 from/to nexus (https\://repo.mc-git.com/repository/maven-group/)\: C\:\\Users\\DELL\\OneDrive\\Desktop\\AI-OPS\\AST java parser\\ast-java-parser\\.m2\\org\\springframework\\boot\\spring-boot-starter-parent\\4.0.5\\spring-boot-starter-parent-4.0.5.pom.1636321801291627864.tmp.15100317219762192262.tmp

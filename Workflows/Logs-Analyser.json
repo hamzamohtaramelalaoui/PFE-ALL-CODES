@@ -1,0 +1,650 @@
+{
+  "name": "Logs-Analyser",
+  "nodes": [
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=generate a logql query to get {{ $json.body.service }} logs don't use any filter out of the labels i afford you\n\nreturn only the logql query\n\n{{ $json.name }}\n{{ $json.uid }}\n{{ JSON.stringify($json.labels, null, 2) }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -1104,
+        -400
+      ],
+      "id": "c4e2a311-2c73-4227-819f-3fd16d65983d",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-oss-120b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -1312,
+        32
+      ],
+      "id": "3d3156a0-bfbe-449f-9e1c-02522dfb7beb",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "Q5PAAfxfy5i2A1FL",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "serverTransport": "sse",
+        "endpointUrl": "http://172.239.4.146:8082/sse",
+        "tool": {
+          "__rl": true,
+          "value": "query_loki_logs",
+          "mode": "list",
+          "cachedResultName": "query_loki_logs"
+        },
+        "parameters": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "datasourceUid": "={{ $json.uid }}",
+            "logql": "={{ $json.output }}",
+            "limit": "=2000"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "datasourceUid",
+              "displayName": "datasourceUid",
+              "defaultMatch": false,
+              "required": true,
+              "display": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "direction",
+              "displayName": "direction",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "endRfc3339",
+              "displayName": "endRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "logql",
+              "displayName": "logql",
+              "defaultMatch": false,
+              "required": true,
+              "display": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "queryType",
+              "displayName": "queryType",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "startRfc3339",
+              "displayName": "startRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "stepSeconds",
+              "displayName": "stepSeconds",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "number",
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "timeout": 1000000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        -496,
+        -400
+      ],
+      "id": "8568121b-20e0-48e9-a874-54630355f83a",
+      "name": "MCP Client3"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -816,
+        -256
+      ],
+      "id": "d7d2b2e8-ca65-4cf4-8038-e0a6be086021",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analyze the provided logs, i want to know the {{ $json.body.commandName }}\n\nIf there are errors:\n- explain the current status\n- identify root causes\n- suggest solutions\n- give recommendations\n\ndon't call any tool\nyou don't have to use any tool\nRespond in clean HTML only. Use:\n- <h1>, <h2> for titles\n- <p> for paragraphs  \n- <ul><li> for lists\n- <table> for tables\n- add cool css make it good looking\n- No Markdown whatsoever no ##, no **, no |tables|, no backticks and no \\n\n\n{{ JSON.stringify($json.content, null, 2) }}",
+        "needsFallback": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        16,
+        -496
+      ],
+      "id": "15d37963-202f-4a2a-ae6b-8d06fa432e0a",
+      "name": "AI Agent1"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "fcca9a2d-003a-49a8-9564-f53ff9da0268",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -2368,
+        -528
+      ],
+      "id": "274a0a74-36df-405c-9d9b-5233109ef3ce",
+      "name": "Webhook",
+      "webhookId": "fcca9a2d-003a-49a8-9564-f53ff9da0268"
+    },
+    {
+      "parameters": {
+        "jsCode": "const merged = {\n  ...items[0].json,\n  ...items[1].json\n};\n\nreturn [{ json: merged }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        -368
+      ],
+      "id": "28643648-62a1-4440-b891-3f084fb03578",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1456,
+        -368
+      ],
+      "id": "00042f81-de67-44ac-8ddb-4b0a31883cc7",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "model": "qwen/qwen3-32b",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        -96
+      ],
+      "id": "c6a57181-2759-487b-8422-404034ddd8fe",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "Q5PAAfxfy5i2A1FL",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\n\nconst date = now.toISOString().split('T')[0]; // YYYY-MM-DD\n\nconst time = now.toTimeString().split(' ')[0].replace(/:/g, '-'); // HH-MM-SS\n\nconst service = $input.first().json.body.service\n\nconst cmd = $input.first().json.body.commandName\n\nreturn [\n  {\n    json: {\n      message: `${cmd}-${service}-${date}-${time}`\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1984,
+        -112
+      ],
+      "id": "7bfead2a-19b1-4070-8d4f-5109df9caba0",
+      "name": "Code in JavaScript4"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        512,
+        -224
+      ],
+      "id": "df907b9f-1cd9-4b42-a743-b76233c94bab",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const merged = {\n  ...items[0].json,\n  ...items[1].json\n};\n\nreturn [{ json: merged }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        -416
+      ],
+      "id": "f4359f5c-66dd-43c9-bae0-545f2848026a",
+      "name": "Code in JavaScript6"
+    },
+    {
+      "parameters": {
+        "jsCode": "const merged = {\n  ...items[0].json,\n  ...items[1].json,\n};\n\nreturn [{ json: merged }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        -400
+      ],
+      "id": "ad32a288-ce7d-412d-a60a-d6eab004029d",
+      "name": "Code in JavaScript7"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -320,
+        -496
+      ],
+      "id": "0fbd6af6-1f55-4518-870f-04bf34de43dd",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const merged = {\n  ...items[0].json,\n  ...items[1].json,\n};\n\nreturn [{ json: merged }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -144,
+        -496
+      ],
+      "id": "fa20c499-f1d0-44c6-8974-2ded347cdb63",
+      "name": "Code in JavaScript8"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -1680,
+        -288
+      ],
+      "id": "5f044468-857e-4ce7-b035-422fbec49ae8",
+      "name": "Merge4"
+    },
+    {
+      "parameters": {
+        "respondWith": "binary",
+        "responseDataSource": "set",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        992,
+        -416
+      ],
+      "id": "99fafae8-d0ce-4f27-ae28-7051ec770c70",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the output from the previous node\nconst raw = $input.first().json.output;\n\n// Remove all \\n and clean up the string\nconst cleaned = raw.replace(/\\\\n/g, '').replace(/\\n/g, '');\n\nreturn [{ json: { output: cleaned } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -496
+      ],
+      "id": "3e6763fc-8d97-486c-8c7c-2cb6fed50395",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://172.239.4.147:8080/api/converter/pdf-download?output=' + encodeURIComponent($('Code in JavaScript6').first().json.message || 'result') }}\n",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": []
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/html",
+        "body": "={{ $json.output }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        848,
+        -416
+      ],
+      "id": "a7296ce9-07f1-4178-bdfd-11e8c2c18601",
+      "name": "HTTP Request2"
+    },
+    {
+      "parameters": {
+        "collection": "skuld_collection",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        -1968,
+        -304
+      ],
+      "id": "67b814b7-cbcf-48bd-ba1e-b547333f57d2",
+      "name": "Find documents",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client3": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Find documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript4": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          },
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript6": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript7": {
+      "main": [
+        [
+          {
+            "node": "MCP Client3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript8",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript8": {
+      "main": [
+        [
+          {
+            "node": "AI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge4": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request2": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find documents": {
+      "main": [
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b7e1755b-3ef5-49f1-a2ac-986b7237f230",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "014097ebc5ecf45651c7b886016d2bb70b01864ccc111b224cf6db8d4dea8554"
+  },
+  "id": "oZq7jSWsvY9sdHd9",
+  "tags": []
+}

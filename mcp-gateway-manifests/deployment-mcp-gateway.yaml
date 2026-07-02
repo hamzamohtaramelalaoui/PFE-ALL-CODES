@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-gateway
+  template:
+    metadata:
+      labels:
+        app: mcp-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: docker/mcp-gateway:dind
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: DOCKER_CONFIG
+              value: /root/.docker
+            - name: MDB_MCP_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-secrets
+                  key: MDB_MCP_CONNECTION_STRING
+            - name: GRAFANA_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-secrets
+                  key: GRAFANA_API_KEY
+            - name: GRAFANA_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-secrets
+                  key: GRAFANA_URL
+            - name: GITLAB_PERSONAL_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-secrets
+                  key: GITLAB_PERSONAL_ACCESS_TOKEN
+            - name: GITLAB_API_URL
+              valueFrom:
+                secretKeyRef:
+                  name: mcp-gateway-secrets
+                  key: GITLAB_API_URL
+          args:
+            - --port=8082
+            - --transport=sse
+            - --servers=grafana
+            - --memory=512Mb
+            - --secrets=/run/secrets/mcp.env
+            - --additional-catalog=/run/catalog-override.yaml
+          ports:
+            - name: http
+              containerPort: 8082
+          volumeMounts:
+            - name: gateway-secrets
+              mountPath: /run/secrets/mcp.env
+              subPath: mcp.env
+              readOnly: true
+            - name: gateway-catalog
+              mountPath: /run/catalog-override.yaml
+              subPath: catalog-override.yaml
+              readOnly: true
+            - name: docker-config
+              mountPath: /root/.docker/config.json
+              subPath: .dockerconfigjson
+              readOnly: true
+      volumes:
+        - name: gateway-secrets
+          secret:
+            secretName: mcp-gateway-secrets
+        - name: gateway-catalog
+          configMap:
+            name: mcp-gateway-catalog
+        - name: docker-config
+          secret:
+            secretName: mcp-gateway-docker-config

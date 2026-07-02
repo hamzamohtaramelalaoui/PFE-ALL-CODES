@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mc-intra-drain3-service
+  namespace: mc-intra
+  labels:
+    app: mc-intra-drain3-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mc-intra-drain3-service
+  template:
+    metadata:
+      labels:
+        app: mc-intra-drain3-service
+    spec:
+      containers:
+        - name: mc-intra-drain3-service
+          image: marketingconfort/mc-intra-drain3-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8011
+              name: http
+          env:
+            - name: DRAIN3_HOST
+              value: "0.0.0.0"
+            - name: DRAIN3_PORT
+              value: "8011"
+            - name: DRAIN3_CONFIG
+              value: /app/drain3.ini
+            - name: LOG_LEVEL
+              value: INFO
+          volumeMounts:
+            - name: drain3-config
+              mountPath: /app/drain3.ini
+              subPath: drain3.ini
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: drain3-config
+          configMap:
+            name: drain3-config

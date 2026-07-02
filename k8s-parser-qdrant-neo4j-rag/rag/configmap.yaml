@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rag-workflow-config
+data:
+  SUMMARY_PROVIDER: "groq"
+  OPENAI_MODEL: "gpt-5.2"
+  OPENAI_EMBEDDING_MODEL: "text-embedding-3-small"
+  JINA_EMBEDDING_MODEL: "jina-embeddings-v5-text-small"
+  JINA_EMBEDDING_TASK: "retrieval.query"
+  GROQ_MODEL: "openai/gpt-oss-120b"
+  WORKFLOW_ENABLE_SUMMARY: "true"
+  WORKFLOW_EMBEDDING_PROVIDER: "jina"
+  WORKFLOW_EMBEDDING_MODEL: "jina-embeddings-v5-text-small"
+  WORKFLOW_PUSH_QDRANT: "true"
+  WORKFLOW_PUSH_NEO4J: "true"
+  QDRANT_URL: "http://qdrant:6333"
+  QDRANT_COLLECTION: "code_chunks"
+  QDRANT_DISTANCE: "Cosine"
+  QDRANT_BATCH_SIZE: "64"
+  QDRANT_RECREATE: "false"
+  QDRANT_DELETE_MISSING: "true"
+  NEO4J_URL: "http://neo4j:7474"
+  NEO4J_DATABASE: "neo4j"
+  NEO4J_USERNAME: "neo4j"
+  NEO4J_BATCH_SIZE: "200"
+  NEO4J_RECREATE: "false"
+  NEO4J_DELETE_MISSING: "true"

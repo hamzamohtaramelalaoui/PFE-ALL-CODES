@@ -1,0 +1,601 @@
+{
+  "name": "Skuld-refresh",
+  "nodes": [
+    {
+      "parameters": {
+        "serverTransport": "sse",
+        "endpointUrl": "http://172.239.4.146:8082/sse",
+        "tool": {
+          "__rl": true,
+          "value": "list_datasources",
+          "mode": "list",
+          "cachedResultName": "list_datasources"
+        },
+        "parameters": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "limit",
+              "displayName": "limit",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "number",
+              "removed": true
+            },
+            {
+              "id": "offset",
+              "displayName": "offset",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "number",
+              "removed": true
+            },
+            {
+              "id": "type",
+              "displayName": "type",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        -1232,
+        -144
+      ],
+      "id": "94569761-18dc-4c81-ac50-17417ffe7c2d",
+      "name": "MCP Client1"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -64,
+        -64
+      ],
+      "id": "e5031097-cf25-4423-9f27-1e343973c336",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "serverTransport": "sse",
+        "endpointUrl": "http://172.239.4.146:8082/sse",
+        "tool": {
+          "__rl": true,
+          "value": "list_loki_label_names",
+          "mode": "list",
+          "cachedResultName": "list_loki_label_names"
+        },
+        "parameters": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "datasourceUid": "={{ $json.loki_uid }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "datasourceUid",
+              "displayName": "datasourceUid",
+              "defaultMatch": false,
+              "required": true,
+              "display": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "endRfc3339",
+              "displayName": "endRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "startRfc3339",
+              "displayName": "startRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        -864,
+        -144
+      ],
+      "id": "d6053ac0-3814-47e5-ab6f-a8c2fbc20c7e",
+      "name": "MCP Client3"
+    },
+    {
+      "parameters": {
+        "serverTransport": "sse",
+        "endpointUrl": "http://172.239.4.146:8082/sse",
+        "tool": {
+          "__rl": true,
+          "value": "list_loki_label_values",
+          "mode": "list",
+          "cachedResultName": "list_loki_label_values"
+        },
+        "parameters": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "datasourceUid": "={{ $('Loop Over Items').item.json.loki_uid }}",
+            "labelName": "={{ $('Loop Over Items').item.json.name }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "datasourceUid",
+              "displayName": "datasourceUid",
+              "defaultMatch": false,
+              "required": true,
+              "display": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "endRfc3339",
+              "displayName": "endRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            },
+            {
+              "id": "labelName",
+              "displayName": "labelName",
+              "defaultMatch": false,
+              "required": true,
+              "display": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "startRfc3339",
+              "displayName": "startRfc3339",
+              "defaultMatch": false,
+              "required": false,
+              "display": true,
+              "type": "string",
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        272,
+        -64
+      ],
+      "id": "dcd9a3c3-d0eb-4f96-be70-8adbd90082bd",
+      "name": "MCP Client4"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// extract values\nconst textArray = items[0].json.content[0].text;\nconst loki_uid = items[1].json.loki_uid;\n\n// map each value + inject loki_uid\nreturn textArray.map(v => ({\n  json: {\n    name: v,\n    loki_uid: loki_uid\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -480,
+        -112
+      ],
+      "id": "665024ed-a30b-445e-b5a8-c370c540ca0e",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -688,
+        -112
+      ],
+      "id": "55eb650e-f6db-4600-a91a-edd8c5e212d7",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "collection": "skuld_collection",
+        "fields": "uid, name, type, isDefault, labels",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        656,
+        -240
+      ],
+      "id": "4123b9e1-2ed3-468c-8960-5d02d3e672eb",
+      "name": "Insert documents",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "collection": "skuld_collection"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        -1456,
+        -144
+      ],
+      "id": "4005ae96-78a9-4272-9625-d03d4adffdf9",
+      "name": "Delete documents",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const datasources = $input.first().json.content[0].text.datasources;\nconst loki = datasources.find(ds => ds.type === \"loki\");\n\nreturn [{ json: loki }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -992,
+        -240
+      ],
+      "id": "2fff97fb-5c5c-4f7f-95d3-1b7a03db5c69",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const datasources = $input.first().json.content[0].text.datasources;\n\nconst loki = datasources.find(ds => ds.type === 'loki');\n\nreturn [\n  {\n    json: {\n      loki_uid: loki ? loki.uid : null\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1008,
+        -16
+      ],
+      "id": "3f144cf6-8891-4b7a-adeb-9fed28d5fb4b",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        176,
+        -224
+      ],
+      "id": "dd686a98-f0c9-4213-b879-7a100cbf6f55",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.filter(item => {\n  const v = item.json.name;\n  return v === \"namespace\" || v === \"service_name\";\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -32
+      ],
+      "id": "7cd1cac6-e929-40d5-a7e5-753ed6e87caa",
+      "name": "Code in JavaScript5"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        448,
+        80
+      ],
+      "id": "7cef3744-b05f-4937-89e9-e36d0b6739a2",
+      "name": "Merge4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// get values array from first item\nconst values = items[0].json.content[0].text;\n\n// get name from second item\nconst name = items[1].json.name;\n\nreturn [\n  {\n    json: {\n      name: name,\n      values: values\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        656,
+        80
+      ],
+      "id": "a174f9be-dfc7-481f-9fc2-88ea3e7771db",
+      "name": "Code in JavaScript6"
+    },
+    {
+      "parameters": {
+        "jsCode": "// datasource (first item)\nconst base = items[0].json;\n\n// labels (rest of items)\nconst labels = items.slice(1).map(item => {\n  let values = item.json.values;\n\n  // clean only service_name\n  if (item.json.name === \"service_name\") {\n    values = values.filter(v => !v.startsWith(\"runner-fqunum8vc-project\"));\n  }\n\n  return {\n    name: item.json.name,\n    values: values\n  };\n});\n\nreturn [\n  {\n    json: {\n      ...base,\n      labels: labels\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        -224
+      ],
+      "id": "a3bf6822-537e-4a67-a083-ffff4a1ea108",
+      "name": "Code in JavaScript7"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "4d23e79a-535b-4cfb-be1b-004483370910",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1648,
+        -144
+      ],
+      "id": "f7bd96ea-e334-4158-928f-b8e34f3f7716",
+      "name": "Webhook",
+      "webhookId": "4d23e79a-535b-4cfb-be1b-004483370910"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "uid",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        832,
+        -240
+      ],
+      "id": "3a1717b4-6d49-47c2-b70e-f345a12a8c34",
+      "name": "Split Out"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "MCP Client1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "MCP Client4",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "MCP Client3": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client4": {
+      "main": [
+        [
+          {
+            "node": "Merge4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert documents": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete documents": {
+      "main": [
+        [
+          {
+            "node": "MCP Client1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "MCP Client3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge4": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript6",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript6": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript7": {
+      "main": [
+        [
+          {
+            "node": "Insert documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Delete documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "f69bf371-8029-433f-a36d-bca9013a0f63",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "014097ebc5ecf45651c7b886016d2bb70b01864ccc111b224cf6db8d4dea8554"
+  },
+  "id": "468hog4S5qbhDK5z",
+  "tags": []
+}

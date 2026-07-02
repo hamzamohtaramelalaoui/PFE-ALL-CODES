@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ast-parser-config
+data:
+  SERVER_PORT: "8087"
+  GITLAB_BASE_URL: "https://gitlab.com/api/v4"
+  GITLAB_CLONE_BASE_DIR: "/tmp/gitlab-repos"
+  GITLAB_CLONE_RETENTION_MS: "1800000"
+  GITLAB_CLEANUP_INTERVAL_MS: "300000"
+  WORKFLOW_BASE_URL: "http://rag-workflow:8000"
+  WORKFLOW_TIMEOUT_MS: "1800000"

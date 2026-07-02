@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ast-parser
+  namespace: mcp-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ast-parser
+  template:
+    metadata:
+      labels:
+        app: ast-parser
+    spec:
+      containers:
+        - name: ast-parser
+          image: hamzamohtaramelalaou/ast-parser:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8087
+          envFrom:
+            - configMapRef:
+                name: ast-parser-config
+            - secretRef:
+                name: ast-parser-secret
+          readinessProbe:
+            tcpSocket:
+              port: 8087
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8087
+            initialDelaySeconds: 30
+            periodSeconds: 20

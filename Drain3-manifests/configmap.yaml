@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drain3-config
+  namespace: mc-intra
+data:
+  drain3.ini: |
+    [DRAIN]
+    sim_th = 0.75
+    depth = 4
+    max_children = 100
+    max_clusters = 1024
+    extra_delimiters = [":", "/", "?", "=", "&"]
+
+    [MASKING]
+    masking = []

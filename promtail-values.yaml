@@ -1,0 +1,81 @@
+config:
+  clients:
+    - url: http://loki.observability.svc.cluster.local:3100/loki/api/v1/push
+
+  scrape_configs:
+    - job_name: kubernetes-pods
+      kubernetes_sd_configs:
+        - role: pod
+      relabel_configs:
+        # Scrape all namespaces (remove namespace filter)
+        # Drop completed/evicted pods
+        - source_labels: [__meta_kubernetes_pod_phase]
+          action: drop
+          regex: (Succeeded|Failed)
+        # Set log path
+        - action: replace
+          replacement: /var/log/pods/*$1/*.log
+          separator: /
+          source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+          target_label: __path__
+        # Add labels
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod_name
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_node_name]
+          target_label: node_name
+        # Pod labels → Loki (e.g. environment, project_hash from vsn-user-service)
+        - source_labels: [__meta_kubernetes_pod_label_environment]
+          target_label: environment
+          action: replace
+          regex: (.+)
+        - source_labels: [__meta_kubernetes_pod_label_project_hash]
+          target_label: project_hash
+          action: replace
+          regex: (.+)
+
+  snippets:
+    pipelineStages:
+      - cri: {}
+      - match:
+          selector: '{namespace="mc-intra"}'
+          stages:
+            - json:
+                expressions:
+                  timestamp: '"@timestamp"'
+                  level: '"log.level"'
+                  message: message
+                  error_type: '"error.type"'
+                  error_message: '"error.message"'
+                  stack: '"error.stack_trace"'
+            - template:
+                source: level
+                template: '{{ if .Value }}{{ ToLower .Value }}{{ else }}unknown{{ end }}'
+            - labels:
+                level: level
+            - timestamp:
+                source: timestamp
+                format: RFC3339
+
+resources:
+  limits:
+    cpu: "200m"
+    memory: "512Mi"
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+
+podSecurityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  fsGroup: 0
+
+containerSecurityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    add:
+      - SYS_RESOURCE
+    drop:
+      - ALL

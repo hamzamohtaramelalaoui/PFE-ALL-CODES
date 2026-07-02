@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-gateway-catalog
+data:
+  catalog-override.yaml: |
+    name: local-overrides
+    displayName: Local Overrides
+    registry:
+      skuldmcp:
+        type: server
+        image: hamzamohtaramelalaou/skuld-mcp2:latest
+        longLived: true
+        command: [ "--transport=stdio" ]
+        secrets:
+          - name: grafana.api_key
+            env: GRAFANA_API_KEY
+          - name: MDB_MCP_CONNECTION_STRING
+            env: MDB_MCP_CONNECTION_STRING
+        env:
+          - name: GRAFANA_URL
+            value: https://grafana.mc-intern.com
+      grafana:
+        type: server
+        image: hamzamohtaramelalaou/mcp-grafana:latest
+        longLived: true
+        command: [ "--transport=stdio" ]
+        secrets:
+          - name: grafana.api_key
+            env: GRAFANA_API_KEY
+        env:
+          - name: GRAFANA_URL
+            value: https://grafana.mc-intern.com
+      gitlab:
+        type: server
+        image: mcp/gitlab@sha256:a1b8571a210a3c8b17b288498d287cd1c3512c10519330ea71ca48e559e78917
+        longLived: true
+        command: [ "--transport=stdio" ]
+        secrets:
+          - name: gitlab.personal_access_token
+            env: GITLAB_PERSONAL_ACCESS_TOKEN
+          - name: gitlab.url
+            env: GITLAB_API_URL
+        env:
+          - name: GITLAB_API_URL
+            value: https://gitlab.com/api/v4
+          - name: gitlab.url
+            env: https://gitlab.com/api/v4

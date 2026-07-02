@@ -1,0 +1,284 @@
+{
+  "name": "skuld-ls",
+  "nodes": [
+    {
+      "parameters": {
+        "collection": "skuld_collection",
+        "options": {
+          "projection": "{\n  \"_id\": 0,\n  \"name\": 1,\n  \"uid\": 1\n}"
+        }
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        -224,
+        112
+      ],
+      "id": "10c34aa2-80bf-48f1-97fb-b938daae0b4c",
+      "name": "Find documents",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "aggregate",
+        "collection": "skuld_collection",
+        "query": "=[\n  {\n    \"$match\": {\n      \"uid\": \"{{ $json.body.uid }}\"\n    }\n  },\n  {\n    \"$project\": {\n      \"_id\": 0,\n      \"label_values\": {\n        \"$map\": {\n          \"input\": {\n            \"$filter\": {\n              \"input\": \"$labels\",\n              \"as\": \"label\",\n              \"cond\": {\n                \"$eq\": [\"$$label.name\", \"{{ $json.body.label }}\"]\n              }\n            }\n          },\n          \"as\": \"filtered\",\n          \"in\": \"$$filtered.values\"\n        }\n      }\n    }\n  }\n]"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        32,
+        -144
+      ],
+      "id": "188a73dc-cea9-4011-9fa5-489fbbe682b1",
+      "name": "Aggregate documents",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "aggregate",
+        "collection": "skuld_collection",
+        "query": "=[\n  {\n    \"$match\": {\n      \"uid\": \"{{ $json.body.uid }}\"\n    }\n  },\n  {\n    \"$project\": {\n      \"_id\": 0,\n      \"label_names\": {\n        \"$map\": {\n          \"input\": \"$labels\",\n          \"as\": \"label\",\n          \"in\": \"$$label.name\"\n        }\n      }\n    }\n  }\n]"
+      },
+      "type": "n8n-nodes-base.mongoDb",
+      "typeVersion": 1.2,
+      "position": [
+        32,
+        16
+      ],
+      "id": "6dfcc6a3-5425-477c-9e81-a9475d2681ca",
+      "name": "Aggregate documents1",
+      "credentials": {
+        "mongoDb": {
+          "id": "xdrGqGz1jluHtCja",
+          "name": "MongoDB account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "8081532a-5b0b-4f85-ade3-40f5577b366e",
+                    "leftValue": "={{ $json.body.uid }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "fa38ecb4-778b-451d-b1b4-61bdf3f80a53",
+                    "leftValue": "={{ $json.body.uid }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notExists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -464,
+        16
+      ],
+      "id": "099d8bda-cf32-4f8c-bc8c-7880b310ac3d",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "f06ecae1-64de-44be-aa7c-02ddfb203992",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -656,
+        16
+      ],
+      "id": "9e05e452-efd4-4983-b129-3052ac982aed",
+      "name": "Webhook",
+      "webhookId": "f06ecae1-64de-44be-aa7c-02ddfb203992"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.body.label }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    },
+                    "id": "bfccc959-e0a2-4285-86d6-571b3b85a7b7"
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "b4c964c3-1045-41fc-a038-5cdfde5e6b68",
+                    "leftValue": "={{ $json.body.label }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "string",
+                      "operation": "notExists",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -224,
+        -80
+      ],
+      "id": "3296def0-eaa2-4c2e-a1d9-9c96a8b9dcc8",
+      "name": "Switch1"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Aggregate documents1": {
+      "main": [
+        []
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Switch1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate documents": {
+      "main": [
+        []
+      ]
+    },
+    "Switch1": {
+      "main": [
+        [
+          {
+            "node": "Aggregate documents",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aggregate documents1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "6a74f8c8-f7dd-4bf0-a370-c621c3a136ea",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "014097ebc5ecf45651c7b886016d2bb70b01864ccc111b224cf6db8d4dea8554"
+  },
+  "id": "wk0uh41vQSHitNk9",
+  "tags": []
+}
